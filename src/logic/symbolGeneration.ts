@@ -7,7 +7,7 @@ import {
   NORMAL_MULTIPLIER_VALUES,
   MULTIPLIER_WEIGHTS,
   NORMAL_MULTIPLIER_CHANCE,
-  BONUS_MULTIPLIER_FREQUENCY,
+  BONUS_MULTIPLIER_CHANCE,
   MEGA_WILD_SYMBOL,
   MEGA_WILD_CHANCE_NORMAL,
 } from '../config'
@@ -58,16 +58,15 @@ export function randomBonusSymbol(): string {
     return MEGA_WILD_SYMBOL
   }
 
-  // Check for multiplier - higher frequency in bonus mode (~6% total)
-  const multiplierRoll = Math.random() * 100
-  let cumulativeWeight = 0
-
-  for (const value of MULTIPLIER_VALUES) {
-    // Increase the weights for bonus mode to increase multiplier frequency
-    cumulativeWeight += MULTIPLIER_WEIGHTS[value] * BONUS_MULTIPLIER_FREQUENCY
-    if (multiplierRoll < cumulativeWeight) {
-      return `${value}x`
+  // Multiplier chance in bonus play (~1.5% per cell — 3× normal rate, includes 20x)
+  if (Math.random() < BONUS_MULTIPLIER_CHANCE) {
+    const totalMultWeight = MULTIPLIER_VALUES.reduce((sum, v) => sum + MULTIPLIER_WEIGHTS[v], 0)
+    let multRandom = Math.random() * totalMultWeight
+    for (const value of MULTIPLIER_VALUES) {
+      multRandom -= MULTIPLIER_WEIGHTS[value]
+      if (multRandom <= 0) return `${value}x`
     }
+    return '2x'
   }
 
   // Regular symbol

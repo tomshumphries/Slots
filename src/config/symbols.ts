@@ -28,9 +28,9 @@ export const SYMBOL_WEIGHTS: Record<string, number> = {
 // These are for minimum cluster size (7), larger clusters get bonuses
 // Rarer symbols pay significantly more to reward lucky hits
 export const SYMBOL_PAYOUTS: Record<string, number> = {
-  '🍒': 0.375,  // cherries = £0.375 (most common)
-  '🍀': 0.6,    // clovers = £0.60
-  '🍇': 0.9,    // grapes = £0.90
-  '🔔': 1.5,    // bells = £1.50 (uncommon)
-  '💎': 3.75,   // diamonds = £3.75 (rare - big payouts!)
+  '🍒': 0.265,  // cherries (most common)
+  '🍀': 0.425,  // clovers
+  '🍇': 0.64,   // grapes
+  '🔔': 1.07,   // bells (uncommon)
+  '💎': 2.65,   // diamonds (rare)
 }

@@ -1,10 +1,11 @@
 // Headless spin resolvers for Monte Carlo simulation.
-// These are exact ports of the spin() and bonusSpin() logic from SlotMachine.tsx
-// with all UI state (setState, setTimeout, soundManager) stripped out.
-// The UI callbacks and these resolvers must stay in sync when game math changes.
+// These are exact ports of spin() and bonusSpin() from SlotMachine.tsx with all
+// UI side effects (setState, setTimeout, soundManager) removed.
+// Each resolver returns rich per-spin statistics used by the sim aggregator.
 
 import {
   FRUIT_METER_MAX,
+  FRUIT_METER_BREAKPOINTS,
   WILDS_PER_BREAKPOINT,
   BONUS_FRUIT_METER_MAX,
   BONUS_FRUIT_METER_BREAKPOINTS,
@@ -16,17 +17,37 @@ import {
 
 import { generateGrid, generateBonusGrid, cascadeGrid, spawnWilds } from './gridOperations'
 import { findClusters, getMegaWildBonusCells } from './clusterDetection'
-import { calculateClusterWin } from './winCalculation'
+import { getClusterWinDetail } from './winCalculation'
 import { getNewBreakpointIndices } from './meterHelpers'
 import { isWildcard, isMegaWild } from '../utils/helpers'
+
+// ── Per-spin data structures ─────────────────────────────────────────────────
+
+export interface SymbolWinEntry {
+  clusters: number    // times this symbol formed a winning cluster
+  payout: number      // total £ paid
+  cells: number       // total cells in winning clusters
+}
+
+export interface MultiplierEntry {
+  count: number           // times this multiplier value appeared in a winning cluster
+  totalPayout: number     // total payout from clusters containing this multiplier
+  contribution: number    // extra vs no-multiplier (payout - baseWin) across all clusters
+}
 
 export interface SpinResult {
   totalWin: number
   bonusTriggered: boolean
   chainCount: number
   finalMeter: number
-  clustersHit: number
+  meterPeakBP: number   // highest FRUIT_METER_BREAKPOINTS index crossed (-1 = none)
+  symbolWins: Record<string, SymbolWinEntry>
+  multiplierData: Record<string, MultiplierEntry>
   megaWildTriggered: boolean
+  megaWildPayout: number
+  clusterSizes: number[]
+  wildSpawnsTotal: number
+  baseWin: number         // total win without any multipliers
 }
 
 export interface BonusResult {
@@ -34,41 +55,77 @@ export interface BonusResult {
   freeSpinsUsed: number
   maxRowsReached: number
   perSpinWins: number[]
+  rowsUnlockedFinal: number   // 0-3
+  meterFillEvents: number     // how many +2 spin awards in this round
+  symbolWins: Record<string, SymbolWinEntry>
+  multiplierData: Record<string, MultiplierEntry>
+  megaWildCount: number
+  megaWildPayout: number
 }
 
-// Resolves a single normal spin end-to-end (grid gen → cascade loop → meter → bonus check).
-// Mirrors spin() in SlotMachine.tsx — same outer/inner loop, same breakpoint logic.
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function addSymbolWin(
+  map: Record<string, SymbolWinEntry>,
+  symbol: string,
+  payout: number,
+  cells: number
+) {
+  if (!map[symbol]) map[symbol] = { clusters: 0, payout: 0, cells: 0 }
+  map[symbol].clusters++
+  map[symbol].payout += payout
+  map[symbol].cells += cells
+}
+
+function addMultiplierData(
+  map: Record<string, MultiplierEntry>,
+  values: number[],
+  totalPayout: number,
+  baseWin: number
+) {
+  for (const v of values) {
+    const key = `${v}x`
+    if (!map[key]) map[key] = { count: 0, totalPayout: 0, contribution: 0 }
+    map[key].count++
+    map[key].totalPayout += totalPayout
+    map[key].contribution += totalPayout - baseWin
+  }
+}
+
+// ── Normal spin ──────────────────────────────────────────────────────────────
+
 export function resolveSpin(): SpinResult {
   let currentGrid = generateGrid()
   let currentMeterValue = 0
+  let peakMeter = 0
   let totalWin = 0
+  let baseWin = 0
   let chain = 0
   let bonusTriggered = false
-  let clustersHit = 0
   let megaWildTriggered = false
+  let megaWildPayout = 0
+  let wildSpawnsTotal = 0
+  const symbolWins: Record<string, SymbolWinEntry> = {}
+  const multiplierData: Record<string, MultiplierEntry> = {}
+  const clusterSizes: number[] = []
 
-  // Outer loop: re-enters after spawning wilds at breakpoints (identical to spin())
   outer: while (true) {
     const meterBeforePhase = currentMeterValue
 
-    // Inner loop: cascade until no clusters remain
     while (true) {
       const clusters = findClusters(currentGrid, MIN_CLUSTER_SIZE, BASE_ROWS)
       if (clusters.length === 0) break
 
       chain++
-      clustersHit += clusters.length
 
       let matchedSymbolCount = 0
       const allMatchedSet = new Set<string>()
       for (const cluster of clusters) {
-        cluster.forEach(cell => {
-          allMatchedSet.add(cell)
-          matchedSymbolCount++
-        })
+        cluster.forEach(cell => { allMatchedSet.add(cell); matchedSymbolCount++ })
       }
 
       currentMeterValue = Math.min(currentMeterValue + matchedSymbolCount, FRUIT_METER_MAX)
+      peakMeter = Math.max(peakMeter, currentMeterValue)
 
       const megaWildBonus = getMegaWildBonusCells(currentGrid, clusters, BASE_ROWS)
       let expandedClusters = clusters
@@ -76,60 +133,84 @@ export function resolveSpin(): SpinResult {
       if (megaWildBonus && megaWildBonus.positions.size > 0) {
         megaWildTriggered = true
         expandedClusters = clusters.map(cluster => {
-          let hasMegaWildInCluster = false
-          let clusterMainSymbol: string | null = null
-          for (const cellKey of cluster) {
-            const [c, r] = cellKey.split('-').map(Number)
-            const sym = currentGrid[c][r]
-            if (isMegaWild(sym)) hasMegaWildInCluster = true
-            if (!isWildcard(sym) && !clusterMainSymbol) clusterMainSymbol = sym
+          let hasMW = false
+          let mainSym: string | null = null
+          for (const k of cluster) {
+            const [c, r] = k.split('-').map(Number)
+            const s = currentGrid[c][r]
+            if (isMegaWild(s)) hasMW = true
+            if (!isWildcard(s) && !mainSym) mainSym = s
           }
-          if (hasMegaWildInCluster && clusterMainSymbol === megaWildBonus.symbol) {
-            const expanded = new Set(cluster)
-            megaWildBonus.positions.forEach(pos => expanded.add(pos))
-            return expanded
+          if (hasMW && mainSym === megaWildBonus.symbol) {
+            const ex = new Set(cluster)
+            megaWildBonus.positions.forEach(p => ex.add(p))
+            return ex
           }
           return cluster
         })
-        megaWildBonus.positions.forEach(pos => allMatchedSet.add(pos))
+        megaWildBonus.positions.forEach(p => allMatchedSet.add(p))
       }
 
-      const { win: clusterWin } = calculateClusterWin(currentGrid, expandedClusters)
-      totalWin += clusterWin
+      // Per-cluster stats + win total using getClusterWinDetail
+      for (const cluster of expandedClusters) {
+        const d = getClusterWinDetail(currentGrid, cluster)
+        totalWin += d.win
+        baseWin += d.baseWin
+        clusterSizes.push(d.size)
+
+        if (d.mainSymbol) {
+          addSymbolWin(symbolWins, d.mainSymbol, d.win, d.size)
+          if (d.multiplierValues.length > 0) {
+            addMultiplierData(multiplierData, d.multiplierValues, d.win, d.baseWin)
+          }
+          if (d.hasMegaWild) megaWildPayout += d.win
+        }
+      }
 
       const { newGrid } = cascadeGrid(currentGrid, allMatchedSet, BASE_ROWS)
       currentGrid = newGrid
     }
 
-    const newBreakpointIndices = getNewBreakpointIndices(currentMeterValue, meterBeforePhase)
-    const wildsToSpawn = newBreakpointIndices.reduce(
-      (sum, idx) => sum + WILDS_PER_BREAKPOINT[idx],
-      0
+    const newBPIndices = getNewBreakpointIndices(currentMeterValue, meterBeforePhase)
+    const wildsToSpawn = newBPIndices.reduce(
+      (sum, idx) => sum + WILDS_PER_BREAKPOINT[idx], 0
     )
 
     if (wildsToSpawn > 0) {
+      wildSpawnsTotal += wildsToSpawn
       const { newGrid } = spawnWilds(currentGrid, wildsToSpawn, BASE_ROWS)
       currentGrid = newGrid
       continue outer
     }
 
-    if (currentMeterValue >= FRUIT_METER_MAX) {
-      bonusTriggered = true
-    }
+    if (currentMeterValue >= FRUIT_METER_MAX) bonusTriggered = true
     break
   }
 
-  return { totalWin, bonusTriggered, chainCount: chain, finalMeter: currentMeterValue, clustersHit, megaWildTriggered }
+  const meterPeakBP = FRUIT_METER_BREAKPOINTS.reduce(
+    (peak, bp, idx) => peakMeter >= bp ? idx : peak, -1
+  )
+
+  return {
+    totalWin, bonusTriggered, chainCount: chain, finalMeter: currentMeterValue,
+    meterPeakBP, symbolWins, multiplierData, megaWildTriggered, megaWildPayout,
+    clusterSizes, wildSpawnsTotal, baseWin,
+  }
 }
 
-// Resolves an entire bonus round (all free spins) end-to-end.
-// Mirrors bonusSpin() in SlotMachine.tsx — same cascade loop, row unlocks, +2 spin reward.
+// ── Bonus round ──────────────────────────────────────────────────────────────
+
 export function resolveBonusRound(): BonusResult {
   let freeSpins = 10
   let totalWin = 0
   let unlockedRows = 0
   const perSpinWins: number[] = []
   let maxRowsReached = BASE_ROWS
+  let meterFillEvents = 0
+  const symbolWins: Record<string, SymbolWinEntry> = {}
+  const multiplierData: Record<string, MultiplierEntry> = {}
+  let megaWildCount = 0
+  let megaWildPayout = 0
 
   while (freeSpins > 0) {
     freeSpins--
@@ -144,7 +225,6 @@ export function resolveBonusRound(): BonusResult {
     let addedSpins = false
     let rowsToUnlock = 0
 
-    // Single cascade loop per spin (mirrors bonusSpin — wilds spawned inline)
     while (true) {
       const clusters = findClusters(currentGrid, MIN_CLUSTER_SIZE, activeRows)
       if (clusters.length === 0) break
@@ -152,10 +232,7 @@ export function resolveBonusRound(): BonusResult {
       let matchedSymbolCount = 0
       const allMatchedSet = new Set<string>()
       for (const cluster of clusters) {
-        cluster.forEach(cell => {
-          allMatchedSet.add(cell)
-          matchedSymbolCount++
-        })
+        cluster.forEach(cell => { allMatchedSet.add(cell); matchedSymbolCount++ })
       }
 
       previousMeterValue = currentMeterValue
@@ -167,57 +244,64 @@ export function resolveBonusRound(): BonusResult {
 
       if (megaWildBonus && megaWildBonus.positions.size > 0) {
         expandedClusters = clusters.map(cluster => {
-          let hasMegaWildInCluster = false
-          let clusterMainSymbol: string | null = null
-          for (const cellKey of cluster) {
-            const [c, r] = cellKey.split('-').map(Number)
-            const sym = currentGrid[c][r]
-            if (isMegaWild(sym)) hasMegaWildInCluster = true
-            if (!isWildcard(sym) && !clusterMainSymbol) clusterMainSymbol = sym
+          let hasMW = false
+          let mainSym: string | null = null
+          for (const k of cluster) {
+            const [c, r] = k.split('-').map(Number)
+            const s = currentGrid[c][r]
+            if (isMegaWild(s)) hasMW = true
+            if (!isWildcard(s) && !mainSym) mainSym = s
           }
-          if (hasMegaWildInCluster && clusterMainSymbol === megaWildBonus.symbol) {
-            const expanded = new Set(cluster)
-            megaWildBonus.positions.forEach(pos => expanded.add(pos))
-            return expanded
+          if (hasMW && mainSym === megaWildBonus.symbol) {
+            const ex = new Set(cluster)
+            megaWildBonus.positions.forEach(p => ex.add(p))
+            return ex
           }
           return cluster
         })
-        megaWildBonus.positions.forEach(pos => allMatchedSet.add(pos))
+        megaWildBonus.positions.forEach(p => allMatchedSet.add(p))
       }
 
-      const { win: clusterWin } = calculateClusterWin(currentGrid, expandedClusters)
-      spinWin += clusterWin
+      for (const cluster of expandedClusters) {
+        const d = getClusterWinDetail(currentGrid, cluster)
+        spinWin += d.win
 
-      // +2 free spins if meter fills for the first time this spin
+        if (d.mainSymbol) {
+          addSymbolWin(symbolWins, d.mainSymbol, d.win, d.size)
+          if (d.multiplierValues.length > 0) {
+            addMultiplierData(multiplierData, d.multiplierValues, d.win, d.baseWin)
+          }
+          if (d.hasMegaWild) {
+            megaWildCount++
+            megaWildPayout += d.win
+          }
+        }
+      }
+
       if (cappedMeter >= BONUS_FRUIT_METER_MAX && !addedSpins) {
         addedSpins = true
+        meterFillEvents++
         freeSpins += 2
       }
 
-      const newBreakpointIndices = getNewBreakpointIndices(
-        currentMeterValue,
-        previousMeterValue,
-        BONUS_FRUIT_METER_BREAKPOINTS
+      const newBPIndices = getNewBreakpointIndices(
+        currentMeterValue, previousMeterValue, BONUS_FRUIT_METER_BREAKPOINTS
       )
-
-      // Wilds from breakpoints (last breakpoint gives +2 spins, not wilds)
-      const wildsToSpawn = newBreakpointIndices
+      const wildsToSpawn = newBPIndices
         .filter(idx => idx < BONUS_FRUIT_METER_BREAKPOINTS.length - 1)
         .reduce((sum, idx) => sum + BONUS_WILDS_PER_BREAKPOINT[idx], 0)
 
-      // Row unlocks at breakpoints 0, 1, 2 (meter values 25, 50, 75)
-      rowsToUnlock += newBreakpointIndices.filter(idx => idx < 3).length
+      rowsToUnlock += newBPIndices.filter(idx => idx < 3).length
 
       const { newGrid } = cascadeGrid(currentGrid, allMatchedSet, activeRows, true)
       currentGrid = newGrid
 
       if (wildsToSpawn > 0) {
-        const { newGrid: gridWithWilds } = spawnWilds(currentGrid, wildsToSpawn, activeRows)
-        currentGrid = gridWithWilds
+        const { newGrid: gw } = spawnWilds(currentGrid, wildsToSpawn, activeRows)
+        currentGrid = gw
       }
     }
 
-    // Row unlocks persist across spins within the bonus round
     if (rowsToUnlock > 0) {
       unlockedRows = Math.min(unlockedRows + rowsToUnlock, MAX_BONUS_ROWS)
     }
@@ -227,9 +311,8 @@ export function resolveBonusRound(): BonusResult {
   }
 
   return {
-    totalWin,
-    freeSpinsUsed: perSpinWins.length,
-    maxRowsReached,
-    perSpinWins,
+    totalWin, freeSpinsUsed: perSpinWins.length, maxRowsReached,
+    perSpinWins, rowsUnlockedFinal: unlockedRows, meterFillEvents,
+    symbolWins, multiplierData, megaWildCount, megaWildPayout,
   }
 }

@@ -4,72 +4,77 @@ import { SYMBOL_PAYOUTS, BET_AMOUNT } from '../config'
 import { isMultiplier, isWild, isMegaWild, getMultiplierValue } from '../utils/helpers'
 import type { ClusterResult } from '../types'
 
-// Calculate cluster size bonus multiplier
-// This is the primary scaling factor (chain multipliers removed)
-// Larger clusters are rare and should be well rewarded
 export function getClusterSizeMultiplier(size: number): number {
-  if (size >= 25) return 12.0  // Legendary cluster
-  if (size >= 20) return 8.0   // Massive cluster
-  if (size >= 15) return 5.0   // Huge cluster
-  if (size >= 12) return 3.0   // Large cluster
-  if (size >= 10) return 2.0   // Good cluster
-  if (size >= 8) return 1.4    // Decent cluster
-  return 1.0  // Base (7 symbols)
+  if (size >= 25) return 12.0
+  if (size >= 20) return 8.0
+  if (size >= 15) return 5.0
+  if (size >= 12) return 3.0
+  if (size >= 10) return 2.0
+  if (size >= 8) return 1.4
+  return 1.0
 }
 
-// Calculate win for a set of clusters
-// Multipliers stack ADDITIVELY (2x + 3x = 5x, not 6x)
-// Returns info about wildcards involved for sound effects
-export function calculateClusterWin(
-  grid: string[][],
-  clusters: Set<string>[]
-): ClusterResult {
+// Per-cluster detail — used by calculateClusterWin (UI) and getClusterWinDetail (sim).
+export interface ClusterWinDetail {
+  mainSymbol: string | null
+  win: number
+  baseWin: number         // win with multiplierTotal = 1 (no multiplier boost)
+  size: number
+  multiplierValues: number[]
+  multiplierTotal: number // additive sum (1 if no multipliers)
+  hasWild: boolean
+  hasMegaWild: boolean
+}
+
+export function getClusterWinDetail(grid: string[][], cluster: Set<string>): ClusterWinDetail {
+  let mainSymbol: string | null = null
+  let clusterMultiplier = 0
+  let hasMultiplierInCluster = false
+  const multiplierValues: number[] = []
+  let hasWild = false
+  let hasMegaWild = false
+
+  for (const cellKey of cluster) {
+    const [col, row] = cellKey.split('-').map(Number)
+    const symbol = grid[col][row]
+    if (isMegaWild(symbol)) { hasMegaWild = true; continue }
+    if (isMultiplier(symbol)) {
+      const mult = getMultiplierValue(symbol)
+      clusterMultiplier += mult
+      multiplierValues.push(mult)
+      hasMultiplierInCluster = true
+    } else if (isWild(symbol)) { hasWild = true; continue }
+    else if (!mainSymbol) mainSymbol = symbol
+  }
+
+  if (!hasMultiplierInCluster) clusterMultiplier = 1
+
+  let win = 0
+  let baseWin = 0
+  if (mainSymbol) {
+    const basePayout = SYMBOL_PAYOUTS[mainSymbol] ?? 0.5
+    const sizeMult = getClusterSizeMultiplier(cluster.size)
+    win = basePayout * sizeMult * clusterMultiplier * BET_AMOUNT
+    baseWin = basePayout * sizeMult * 1 * BET_AMOUNT
+  }
+
+  return { mainSymbol, win, baseWin, size: cluster.size, multiplierValues, multiplierTotal: clusterMultiplier, hasWild, hasMegaWild }
+}
+
+// Aggregate win across all clusters. Used by the game UI.
+// Multipliers stack additively: 2x + 3x = 5x total.
+export function calculateClusterWin(grid: string[][], clusters: Set<string>[]): ClusterResult {
   let win = 0
   const multipliers: number[] = []
   let hasWild = false
   let hasMegaWild = false
 
   for (const cluster of clusters) {
-    // Find the main symbol (non-wildcard) and any multipliers in the cluster
-    // Wild symbols are just wildcards with no multiplier value
-    let mainSymbol: string | null = null
-    let clusterMultiplier = 0 // Start at 0 for additive stacking
-    let hasMultiplierInCluster = false
-
-    for (const cellKey of cluster) {
-      const [col, row] = cellKey.split('-').map(Number)
-      const symbol = grid[col][row]
-
-      if (isMegaWild(symbol)) {
-        hasMegaWild = true
-        continue
-      } else if (isMultiplier(symbol)) {
-        // Add all multipliers together (additive stacking)
-        const mult = getMultiplierValue(symbol)
-        clusterMultiplier += mult
-        multipliers.push(mult)
-        hasMultiplierInCluster = true
-      } else if (isWild(symbol)) {
-        // Wilds are just wildcards - no multiplier value, skip for main symbol
-        hasWild = true
-        continue
-      } else if (!mainSymbol) {
-        mainSymbol = symbol
-      }
-    }
-
-    // If no multipliers, use 1x; otherwise use the additive total
-    if (!hasMultiplierInCluster) {
-      clusterMultiplier = 1
-    }
-
-    if (mainSymbol) {
-      const basePayout = SYMBOL_PAYOUTS[mainSymbol] || 0.5
-      const sizeMultiplier = getClusterSizeMultiplier(cluster.size)
-
-      // Payout = base payout × size multiplier × cluster multiplier × bet
-      win += basePayout * sizeMultiplier * clusterMultiplier * BET_AMOUNT
-    }
+    const d = getClusterWinDetail(grid, cluster)
+    win += d.win
+    multipliers.push(...d.multiplierValues)
+    if (d.hasWild) hasWild = true
+    if (d.hasMegaWild) hasMegaWild = true
   }
 
   return { win, multipliers, hasWild, hasMegaWild }

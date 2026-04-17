@@ -7,7 +7,7 @@ import {
   SYMBOL_WEIGHTS,
   MULTIPLIER_WEIGHTS,
   NORMAL_MULTIPLIER_CHANCE,
-  BONUS_MULTIPLIER_FREQUENCY,
+  BONUS_MULTIPLIER_CHANCE,
   FRUIT_METER_MAX,
   FRUIT_METER_BREAKPOINTS,
   WILDS_PER_BREAKPOINT,
@@ -1410,7 +1410,7 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
 
             <div className="payout-section">
               <h3>Multiplier Symbols</h3>
-              <p className="payout-note">Normal play: {(NORMAL_MULTIPLIER_CHANCE * 100).toFixed(1)}% chance | Bonus: {(NORMAL_MULTIPLIER_CHANCE * 100 * BONUS_MULTIPLIER_FREQUENCY).toFixed(1)}% chance</p>
+              <p className="payout-note">Normal play: {(NORMAL_MULTIPLIER_CHANCE * 100).toFixed(1)}% chance per cell | Bonus: {(BONUS_MULTIPLIER_CHANCE * 100).toFixed(1)}% chance per cell</p>
               <table className="payout-table">
                 <thead>
                   <tr>
@@ -1505,7 +1505,7 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
                   <tr><td>Starting Free Spins</td><td>10</td></tr>
                   <tr><td>Grid Size</td><td>{COLS} × {BASE_ROWS} (expandable to {COLS} × {BASE_ROWS + MAX_BONUS_ROWS})</td></tr>
                   <tr><td>Row Unlock Condition</td><td>Meter milestones 25, 50, 75</td></tr>
-                  <tr><td>Multiplier Frequency</td><td>{BONUS_MULTIPLIER_FREQUENCY}x normal rate</td></tr>
+                  <tr><td>Multiplier Frequency</td><td>{(BONUS_MULTIPLIER_CHANCE * 100).toFixed(1)}% per cell ({(BONUS_MULTIPLIER_CHANCE / NORMAL_MULTIPLIER_CHANCE).toFixed(1)}× normal rate)</td></tr>
                   <tr><td>20x Multiplier</td><td>Available (bonus only)</td></tr>
                 </tbody>
               </table>

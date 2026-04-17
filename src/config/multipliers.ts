@@ -14,8 +14,8 @@ export const MULTIPLIER_WEIGHTS: Record<MultiplierValue, number> = {
   20: 0.04,  // ~1% are 20x - extremely rare, bonus only
 }
 
-// Normal play: ~0.5% total multiplier chance (similar to bonus symbol frequency)
+// Normal play: ~0.5% chance per cell that it will be a multiplier symbol
 export const NORMAL_MULTIPLIER_CHANCE = 0.005
 
-// Bonus mode: multipliers appear 1.2x as frequently (subtle increase)
-export const BONUS_MULTIPLIER_FREQUENCY = 1.2
+// Bonus mode: ~3.2% chance per cell — 6.4× normal, makes the bonus feel distinctly richer
+export const BONUS_MULTIPLIER_CHANCE = 0.032
