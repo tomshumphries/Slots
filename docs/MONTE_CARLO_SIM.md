@@ -103,8 +103,7 @@ we can plot E(X) at every sample — that's the convergence chart.
 
 ### 3. Output format
 
-Write one file per run to **`sim-results/`** at repo root (new gitignored
-folder; or we commit for history — your call).
+Write one file per run to **`sim-results/`** at repo root (committed to git — run history is valuable).
 
 Filename: `sim-<timestamp>-<label>.json` (e.g. `sim-2026-04-17_14-03_baseline.json`)
 
@@ -116,7 +115,7 @@ Filename: `sim-<timestamp>-<label>.json` (e.g. `sim-2026-04-17_14-03_baseline.js
     "normalSpins": 1000,
     "bonusSpins": 1000,
     "config": { /* snapshot of SYMBOL_WEIGHTS, payouts, multiplier chances, etc. */ },
-    "seed": 123456   // optional — for reproducibility, see "Open questions"
+    "seed": null      // true Math.random() — no seeding, sample size provides stability
   },
   "summary": {
     "pBonus": 0.012,
@@ -150,7 +149,6 @@ controls and charts.
 - Run label (free text)
 - Normal spin count (default 1000)
 - Bonus spin count (default 1000)
-- Seed (optional)
 - "Run" / "Cancel" buttons
 
 **Live outputs while running:**
@@ -165,21 +163,19 @@ controls and charts.
 - "Save results" button → writes the JSON file
 - History list of past runs for comparison
 
-### 5. File writing — pick one
+### 5. File writing
 
-The browser can't write into the repo directly. Options, in order of
-simplicity:
+A small Vite dev-server middleware in `vite.config.ts` accepts POST
+`/api/write-sim` with the JSON body and writes to `sim-results/<filename>`.
+One-click save from the UI; only active in `npm run dev` (not in production
+build, which is fine for a local tooling screen).
 
-1. **Download link** — `Blob` + anchor click. User drops the file into
-   `sim-results/` manually. Zero infra.
-2. **Vite dev-server middleware** — add a small POST endpoint in
-   `vite.config.ts` that accepts the JSON and writes it to
-   `sim-results/<filename>`. One-click save, only works in `npm run dev`.
-3. **Node CLI** — `npm run sim -- --normal 1000 --bonus 1000 --label foo`
-   runs headlessly in Node, writes the file directly. Loses the UI.
+`sim-results/` is committed to git so run history is preserved alongside the
+config snapshot that produced it.
 
-Recommend option 2 for the UI-first experience; option 3 as a follow-up for
-overnight large runs (100k+ spins).
+As the project grows server-side, this endpoint is the natural seam for
+moving other compute (e.g. bulk overnight runs via Node CLI) without
+changing the UI contract.
 
 ---
 
@@ -201,38 +197,37 @@ overnight large runs (100k+ spins).
 
 ## Implementation phases
 
-1. **Extract `resolveSpin()`** — headless port of the normal-spin loop.
-   Verify by side-by-side comparison: run the UI with a fixed seed, log each
-   spin's final win, run the resolver with the same seed, assert identical
-   wins.
-2. **Extract `resolveBonusRound()`** — same treatment for the bonus loop.
+1. ✅ **Extract `resolveSpin()`** — `src/logic/spinResolver.ts`. Mirrors `spin()`
+   in `SlotMachine.tsx`: outer/inner cascade loop, meter tracking, mega wild
+   expansion, breakpoint wild spawning, bonus trigger detection.
+2. ✅ **Extract `resolveBonusRound()`** — same file. Mirrors `bonusSpin()`:
+   10 starting free spins, row unlocks, +2 spin reward on meter fill, inline
+   wild spawning in cascade loop.
 3. **Refactor `SlotMachine.tsx`** to drive animations off the resolver's
-   result rather than computing as it goes. (This is the step that prevents
-   future drift between UI and sim.)
-4. **Build `simRunner`** — loops the resolvers, tracks running means, emits
-   progress events.
-5. **Web Worker wrapper** — so 10k-spin runs don't freeze the UI.
-6. **Sim Lab UI** — form, progress, charts, save button. Charts can be a
-   lightweight `<svg>` line or pull in a library (Recharts is ~40KB gzipped
-   — fine).
-7. **File output** — start with download; add the Vite middleware after.
+   result rather than computing as it goes. (Prevents drift between UI and sim.)
+   *Deferred — lower priority while sim is being validated.*
+4. ✅ **Build `simRunner`** — `src/sim/simRunner.ts`. Two batches (normal +
+   bonus), running mean per sample, 95% CI calculation, AbortSignal cancellation,
+   progress callbacks every 50 samples.
+5. ✅ **Web Worker wrapper** — `src/sim/sim.worker.ts`. Runs sim off the main
+   thread; streams progress messages back to the UI.
+6. ✅ **Sim Lab UI** — `src/components/SimLab.tsx` + `SimLab.css`. Config form,
+   live progress bars, Recharts convergence charts for both batches, final
+   summary stat grid with 95% CI, save button. Accessible from the "Simulation
+   Lab" tab in the main nav.
+7. ✅ **File output** — Vite plugin in `vite.config.ts` handles POST
+   `/api/write-sim` and writes `sim-results/<runId>.json`. `sim-results/`
+   committed to git.
 8. **(Stretch) Node CLI runner** for very large overnight runs.
 
 ---
 
-## Open questions (please confirm)
+## Decisions log
 
-1. **Seeded RNG?** `Math.random()` isn't seedable. For reproducible runs
-   (useful when comparing two configs) we'd swap to a seeded PRNG like
-   `mulberry32` in symbol generation. Want this, or is non-deterministic fine?
-2. **File save path.** Browser download (user drops into folder), or Vite
-   dev-server endpoint that writes to `sim-results/` automatically?
-3. **Commit results to git**, or `.gitignore` `sim-results/`?
-4. **Charting library** — inline SVG (zero deps) or add Recharts / Chart.js?
-5. **Normal spin EV — two ways to count it:**
-   - **(a) Excluding bonus payouts**: normal batch counts only non-bonus
-     winnings; bonus EV is added from batch B. Matches your plan.
-   - **(b) Including bonus payouts**: when a normal spin triggers a bonus,
-     also immediately play out the bonus round and include its winnings in
-     that spin's total. Simpler, but correlates the two batches.
-   - Recommend (a) — cleaner separation, easier to debug each half.
+| Question | Decision |
+|---|---|
+| RNG | True `Math.random()` — no seeding. Large samples provide stability. |
+| File write | Vite dev-server middleware → auto-writes to `sim-results/` |
+| Git | `sim-results/` committed — run history preserved with config snapshots |
+| Charts | Recharts (best React-native DX, ~40KB gzipped) |
+| EV counting | Option A — normal batch excludes bonus; E(bonus) from batch B, combined separately |

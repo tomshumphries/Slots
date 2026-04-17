@@ -10,7 +10,6 @@ import {
   BONUS_MULTIPLIER_FREQUENCY,
   MEGA_WILD_SYMBOL,
   MEGA_WILD_CHANCE_NORMAL,
-  MEGA_WILD_CHANCE_BONUS,
 } from '../config'
 
 // Generate a weighted random symbol (normal play - includes multipliers except 20x)
