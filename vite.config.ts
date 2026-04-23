@@ -5,6 +5,7 @@ import { join, resolve } from 'path'
 import type { IncomingMessage, ServerResponse } from 'http'
 
 export default defineConfig({
+  base: '/Slots/',
   plugins: [
     react(),
     {
