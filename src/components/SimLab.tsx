@@ -57,8 +57,8 @@ export default function SimLab() {
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'failed'>('idle')
   const [activeTab, setActiveTab] = useState<DashTab>('overview')
   const [savedRuns, setSavedRuns] = useState<SavedRunMeta[]>([])
-  const [savedRunsLoading, setSavedRunsLoading] = useState(false)
   const [loadingRunId, setLoadingRunId] = useState<string | null>(null)
+  const importRef = useRef<HTMLInputElement>(null)
 
   const [normalChartData, setNormalChartData] = useState<{ i: number; mean: number }[]>([])
   const [bonusChartData, setBonusChartData] = useState<{ i: number; mean: number }[]>([])
@@ -112,22 +112,19 @@ export default function SimLab() {
 
   const cancelSim = useCallback(() => workerRef.current?.postMessage({ type: 'cancel' }), [])
 
-  const fetchSavedRuns = useCallback(async () => {
-    setSavedRunsLoading(true)
+  const fetchSavedRuns = useCallback(() => {
     try {
-      const res = await fetch('/api/sim-results')
-      if (res.ok) setSavedRuns(await res.json())
-    } finally {
-      setSavedRunsLoading(false)
-    }
+      const index = JSON.parse(localStorage.getItem('sim-results-index') ?? '[]') as SavedRunMeta[]
+      setSavedRuns(index)
+    } catch { setSavedRuns([]) }
   }, [])
 
-  const loadRun = useCallback(async (runId: string) => {
+  const loadRun = useCallback((runId: string) => {
     setLoadingRunId(runId)
     try {
-      const res = await fetch(`/api/sim-results/${runId}`)
-      if (!res.ok) return
-      const data: SimResult = await res.json()
+      const raw = localStorage.getItem(`sim-result-${runId}`)
+      if (!raw) return
+      const data: SimResult = JSON.parse(raw)
       setResult(data)
       setNormalChartData(data.normalSeries.map(s => ({ i: s.i, mean: s.runningMean })))
       setBonusChartData(data.bonusSeries.map(s => ({ i: s.i, mean: s.runningMean })))
@@ -139,24 +136,67 @@ export default function SimLab() {
     }
   }, [])
 
-  const deleteRun = useCallback(async (runId: string) => {
+  const deleteRun = useCallback((runId: string) => {
     if (!confirm(`Delete "${runId}"?`)) return
-    const res = await fetch(`/api/sim-results/${runId}`, { method: 'DELETE' })
-    if (res.ok) setSavedRuns(prev => prev.filter(r => r.runId !== runId))
+    localStorage.removeItem(`sim-result-${runId}`)
+    const index = JSON.parse(localStorage.getItem('sim-results-index') ?? '[]') as SavedRunMeta[]
+    const updated = index.filter(r => r.runId !== runId)
+    localStorage.setItem('sim-results-index', JSON.stringify(updated))
+    setSavedRuns(updated)
   }, [])
 
-  const saveResult = useCallback(async (data: SimResult) => {
+  const saveResult = useCallback((data: SimResult) => {
     setSaveState('saving')
     try {
-      const res = await fetch('/api/sim-results', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-      })
-      if (!res.ok) throw new Error(await res.text())
+      localStorage.setItem(`sim-result-${data.meta.runId}`, JSON.stringify(data))
+      const meta: SavedRunMeta = {
+        runId: data.meta.runId,
+        label: data.meta.label ?? '',
+        timestamp: data.meta.timestamp ?? '',
+        normalSpins: data.meta.normalSpins ?? 0,
+        bonusSpins: data.meta.bonusSpins ?? 0,
+        durationMs: data.meta.durationMs ?? 0,
+        rtpPercent: data.summary?.rtpPercent ?? 0,
+        ciHalfWidthPercent: data.summary?.ciHalfWidthPercent ?? 0,
+      }
+      const index = JSON.parse(localStorage.getItem('sim-results-index') ?? '[]') as SavedRunMeta[]
+      const updated = [meta, ...index.filter(r => r.runId !== data.meta.runId)]
+      localStorage.setItem('sim-results-index', JSON.stringify(updated))
+      setSavedRuns(updated)
       setSaveState('saved')
-      fetchSavedRuns()
     } catch { setSaveState('failed') }
-  }, [fetchSavedRuns])
+  }, [])
+
+  const exportRun = useCallback((runId: string) => {
+    const raw = localStorage.getItem(`sim-result-${runId}`)
+    if (!raw) return
+    const blob = new Blob([raw], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${runId}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }, [])
+
+  const importRun = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => {
+      try {
+        const data: SimResult = JSON.parse(reader.result as string)
+        saveResult(data)
+        setResult(data)
+        setNormalChartData(data.normalSeries.map(s => ({ i: s.i, mean: s.runningMean })))
+        setBonusChartData(data.bonusSeries.map(s => ({ i: s.i, mean: s.runningMean })))
+        setRunState('done')
+        setActiveTab('overview')
+      } catch { alert('Invalid sim result file') }
+    }
+    reader.readAsText(file)
+    e.target.value = ''
+  }, [saveResult])
 
   // Load saved runs on mount
   useEffect(() => { fetchSavedRuns() }, [fetchSavedRuns])
@@ -189,10 +229,12 @@ export default function SimLab() {
       <div className="saved-runs-panel">
         <div className="saved-runs-header">
           <span>Saved Runs{savedRuns.length > 0 ? ` (${savedRuns.length})` : ''}</span>
-          <button className="saved-runs-refresh" onClick={fetchSavedRuns} disabled={savedRunsLoading} title="Refresh list">↻</button>
+          <button className="saved-runs-refresh" onClick={fetchSavedRuns} title="Refresh list">↻</button>
+          <button className="saved-runs-refresh" onClick={() => importRef.current?.click()} title="Import JSON">↑ Import</button>
+          <input ref={importRef} type="file" accept=".json" style={{ display: 'none' }} onChange={importRun} />
         </div>
         {savedRuns.length === 0 ? (
-          <p className="saved-runs-empty">{savedRunsLoading ? 'Loading...' : 'No saved runs yet — results auto-save when a sim completes.'}</p>
+          <p className="saved-runs-empty">No saved runs yet — results auto-save when a sim completes.</p>
         ) : (
           <div className="saved-runs-list">
             {savedRuns.map(run => {
@@ -214,6 +256,8 @@ export default function SimLab() {
                     disabled={loadingRunId === run.runId || isLoaded}>
                     {loadingRunId === run.runId ? '…' : isLoaded ? 'Loaded' : 'Load'}
                   </button>
+                  <button className="saved-run-btn load" onClick={() => exportRun(run.runId)}
+                    title={`Export ${run.runId}`}>↓</button>
                   <button className="saved-run-btn delete" onClick={() => deleteRun(run.runId)}
                     title={`Delete ${run.runId}`}>✕</button>
                 </div>
@@ -352,7 +396,7 @@ export default function SimLab() {
 
               <div className="sim-save-row">
                 {saveState === 'saving' && <span className="save-status saving">Saving…</span>}
-                {saveState === 'saved' && <span className="save-status saved">Auto-saved ✓ {result.meta.runId}.json</span>}
+                {saveState === 'saved' && <span className="save-status saved">Saved to browser ✓ <button className="sim-btn sim-btn-save" onClick={() => exportRun(result.meta.runId)}>↓ Export JSON</button></span>}
                 {saveState === 'failed' && (
                   <>
                     <span className="save-status failed">Auto-save failed</span>
