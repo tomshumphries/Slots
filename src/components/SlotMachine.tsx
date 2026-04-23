@@ -80,6 +80,10 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
   const [showBigWin, setShowBigWin] = useState(false)
   const BIG_WIN_THRESHOLD = 20 // £20+ triggers big win celebration
 
+  // Panel visibility
+  const [showInfoCard, setShowInfoCard] = useState(true)
+  const [showAdminPanel, setShowAdminPanel] = useState(true)
+
   // Admin/testing features
   const [autoSpin, setAutoSpin] = useState(false)
   const [autoDeposit, setAutoDeposit] = useState(true)
@@ -954,7 +958,10 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
     <div className={`slot-machine ${bonusMode ? 'bonus-mode' : ''}`}>
       {/* Info Cards - positioned to the left of the game area */}
       <div className="info-cards-container">
-        {!bonusMode ? (
+        <button className="panel-toggle" onClick={() => setShowInfoCard(v => !v)}>
+          {showInfoCard ? '▲ Hide' : '▼ How to Play'}
+        </button>
+        {showInfoCard && (!bonusMode ? (
           // Normal Play Info Card
           <div className="info-card normal-info">
             <h3>How to Play</h3>
@@ -1048,7 +1055,7 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
               <p>The meter works just like normal play but with a <strong>bigger target (100)</strong>. Fill it completely to earn <strong>+5 Free Spins!</strong></p>
             </div>
           </div>
-        )}
+        ))}
       </div>
 
       {bonusMode && (
@@ -1227,7 +1234,10 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
 
       {/* Admin Panel - positioned off to the side */}
       <div className="admin-panel">
-        <div className="admin-title">Admin</div>
+        <div className="admin-title" style={{ cursor: 'pointer' }} onClick={() => setShowAdminPanel(v => !v)}>
+          Admin {showAdminPanel ? '▲' : '▼'}
+        </div>
+        {showAdminPanel && <>
 
         <label className="admin-checkbox">
           <input
@@ -1339,6 +1349,7 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
         >
           Payout Info
         </button>
+        </>}
       </div>
 
       <div className="message-container">

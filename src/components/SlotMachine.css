@@ -120,6 +120,21 @@
   max-width: 300px;
 }
 
+.panel-toggle {
+  display: block;
+  width: 100%;
+  margin-bottom: 6px;
+  padding: 4px 10px;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 6px;
+  color: #ccc;
+  font-size: 0.75rem;
+  cursor: pointer;
+  text-align: center;
+}
+.panel-toggle:hover { background: rgba(255,255,255,0.15); }
+
 .info-card {
   background: rgba(15, 15, 30, 0.97);
   border-radius: 16px;
