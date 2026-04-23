@@ -1,7 +1,7 @@
 // Cluster detection using flood fill algorithm
 
-import { COLS, MIN_CLUSTER_SIZE, BASE_ROWS } from '../config'
-import { isWildcard, isMegaWild } from '../utils/helpers'
+import { COLS, MIN_CLUSTER_SIZE, BASE_ROWS, SYMBOLS } from '../config'
+import { isWildcard, isMegaWild, isTransmutation } from '../utils/helpers'
 
 // Find connected clusters using flood fill (no diagonals)
 // Wildcards (multipliers and wilds) can join MULTIPLE clusters simultaneously
@@ -166,5 +166,45 @@ export function getMegaWildBonusCells(
     }
   }
 
+  return null
+}
+
+// Find cells to upgrade as a TRANSMUTATION effect from 🌀 wildcard
+// When 🌀 is in a winning cluster, ALL instances of the cluster's main symbol on the grid
+// are upgraded one tier and join the cluster, paying at the upgraded symbol's rate.
+// Returns: { originalSymbol, upgradedSymbol, positions } or null if no transmutation
+export function getTransmutationCells(
+  grid: string[][],
+  clusters: Set<string>[],
+  activeRows: number = BASE_ROWS
+): { originalSymbol: string; upgradedSymbol: string; positions: Set<string> } | null {
+  for (const cluster of clusters) {
+    let hasTransmutation = false
+    let mainSymbol: string | null = null
+
+    for (const cellKey of cluster) {
+      const [c, r] = cellKey.split('-').map(Number)
+      const sym = grid[c][r]
+      if (isTransmutation(sym)) hasTransmutation = true
+      else if (!isWildcard(sym) && !mainSymbol) mainSymbol = sym
+    }
+
+    if (hasTransmutation && mainSymbol) {
+      const upgradeIdx = SYMBOLS.indexOf(mainSymbol)
+      if (upgradeIdx >= 0 && upgradeIdx < SYMBOLS.length - 1) {
+        const upgradedSymbol = SYMBOLS[upgradeIdx + 1]
+        const extraCells = new Set<string>()
+        for (let col = 0; col < COLS; col++) {
+          for (let row = 0; row < activeRows; row++) {
+            const key = `${col}-${row}`
+            if (grid[col][row] === mainSymbol && !cluster.has(key)) {
+              extraCells.add(key)
+            }
+          }
+        }
+        return { originalSymbol: mainSymbol, upgradedSymbol, positions: extraCells }
+      }
+    }
+  }
   return null
 }

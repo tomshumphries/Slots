@@ -73,13 +73,6 @@ export interface ChainEntry {
   pct: number
 }
 
-export interface RowUnlockEntry {
-  rows: number          // 0-3
-  count: number
-  pct: number
-  avgWin: number
-}
-
 export interface NormalAggregates {
   totalSpins: number
   winDist: WinBuckets
@@ -88,6 +81,9 @@ export interface NormalAggregates {
   megaWildCount: number
   megaWildPayout: number
   megaWildPayoutPct: number
+  transmutationCount: number
+  transmutationPayout: number
+  transmutationPayoutPct: number
   totalMultiplierContribution: number
   multiplierContributionPct: number
   chainDist: ChainEntry[]
@@ -106,11 +102,12 @@ export interface BonusAggregates {
   megaWildCount: number
   megaWildPayout: number
   megaWildPayoutPct: number
+  transmutationCount: number
+  transmutationPayout: number
+  transmutationPayoutPct: number
   totalMultiplierContribution: number
   multiplierContributionPct: number
-  rowUnlockDist: RowUnlockEntry[]
   avgFreeSpinsUsed: number
-  avgMaxRows: number
   meterFillRate: number         // % of rounds where meter filled at least once
   totalExtraSpinEvents: number  // total +2 spin awards across all rounds
   roundsWithExtraSpins: number

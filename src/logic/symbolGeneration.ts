@@ -10,6 +10,9 @@ import {
   BONUS_MULTIPLIER_CHANCE,
   MEGA_WILD_SYMBOL,
   MEGA_WILD_CHANCE_NORMAL,
+  TRANSMUTATION_SYMBOL,
+  TRANSMUTATION_CHANCE_NORMAL,
+  TRANSMUTATION_CHANCE_BONUS,
 } from '../config'
 
 // Generate a weighted random symbol (normal play - includes multipliers except 20x)
@@ -18,6 +21,11 @@ export function randomSymbol(inCascade: boolean = false): string {
   // Only spawns on initial grid generation, not during cascades
   if (!inCascade && Math.random() < MEGA_WILD_CHANCE_NORMAL) {
     return MEGA_WILD_SYMBOL
+  }
+
+  // Transmutation Wild chance (0.08% in normal play - slightly rarer than Mega Wild)
+  if (!inCascade && Math.random() < TRANSMUTATION_CHANCE_NORMAL) {
+    return TRANSMUTATION_SYMBOL
   }
 
   // Multiplier chance in normal play (~0.5% total)
@@ -56,6 +64,11 @@ export function randomBonusSymbol(): string {
   // Mega Wild chance - same as normal play (0.1%)
   if (Math.random() < MEGA_WILD_CHANCE_NORMAL) {
     return MEGA_WILD_SYMBOL
+  }
+
+  // Transmutation Wild chance (0.4% in bonus mode)
+  if (Math.random() < TRANSMUTATION_CHANCE_BONUS) {
+    return TRANSMUTATION_SYMBOL
   }
 
   // Multiplier chance in bonus play (~1.5% per cell — 3× normal rate, includes 20x)

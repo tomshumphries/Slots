@@ -579,60 +579,8 @@ export default function SimLab() {
           {/* ── Bonus Deep Dive ── */}
           {activeTab === 'bonus' && (
             <div className="dash-panel">
-              <div className="dual-chart-row">
-                <div className="chart-col">
-                  <h3>Extra row unlock distribution</h3>
-                  <p className="chart-subtitle">% of bonus rounds unlocking 0 / 1 / 2 / 3 extra rows</p>
-                  <ResponsiveContainer width="100%" height={220}>
-                    <BarChart data={result.bonusAgg.rowUnlockDist}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#333" />
-                      <XAxis dataKey="rows" stroke="#888" label={{ value: 'Extra rows', position: 'insideBottomRight', offset: -5, fill: '#888', fontSize: 11 }} />
-                      <YAxis stroke="#888" tickFormatter={v => `${v.toFixed(0)}%`} />
-                      <Tooltip formatter={(v) => [`${Number(v).toFixed(2)}%`, '% of rounds']} labelFormatter={v => `${v} extra row(s)`} />
-                      <Bar dataKey="pct" fill="#a855f7" radius={[3, 3, 0, 0]}>
-                        <LabelList dataKey="pct" position="top" formatter={(v: unknown) => `${Number(v).toFixed(1)}%`} style={{ fontSize: 11, fill: '#aaa' }} />
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-
-                <div className="chart-col">
-                  <h3>Avg win by extra rows unlocked</h3>
-                  <p className="chart-subtitle">Expected value of a bonus round given N extra rows. Higher rows = bigger wins?</p>
-                  <ResponsiveContainer width="100%" height={220}>
-                    <BarChart data={result.bonusAgg.rowUnlockDist.filter(r => r.count > 0)}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#333" />
-                      <XAxis dataKey="rows" stroke="#888" label={{ value: 'Extra rows', position: 'insideBottomRight', offset: -5, fill: '#888', fontSize: 11 }} />
-                      <YAxis stroke="#888" tickFormatter={v => `£${Number(v).toFixed(0)}`} />
-                      <Tooltip formatter={(v) => [`£${Number(v).toFixed(2)}`, 'avg win']} labelFormatter={v => `${v} extra row(s)`} />
-                      <Bar dataKey="avgWin" fill="#f59e0b" radius={[3, 3, 0, 0]}>
-                        <LabelList dataKey="avgWin" position="top" formatter={(v: unknown) => `£${Number(v).toFixed(1)}`} style={{ fontSize: 11, fill: '#aaa' }} />
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-
-              <h3 style={{ marginTop: 20 }}>Row unlock detail table</h3>
-              <table className="sim-table">
-                <thead><tr><th>Extra rows</th><th>Grid size</th><th>Rounds</th><th>% of rounds</th><th>Avg win</th><th>Total win</th></tr></thead>
-                <tbody>
-                  {result.bonusAgg.rowUnlockDist.map(r => (
-                    <tr key={r.rows}>
-                      <td>+{r.rows}</td>
-                      <td>12 × {5 + r.rows}</td>
-                      <td>{r.count.toLocaleString()}</td>
-                      <td>{pct(r.pct)}</td>
-                      <td>£{r.avgWin.toFixed(2)}</td>
-                      <td>£{(r.avgWin * r.count).toFixed(0)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-
               <div className="sim-stat-grid" style={{ marginTop: 16 }}>
                 <StatCard label="Avg free spins / round" value={result.bonusAgg.avgFreeSpinsUsed.toFixed(2)} sub="10 base + extras" />
-                <StatCard label="Avg max grid size" value={`12 × ${result.bonusAgg.avgMaxRows.toFixed(1)}`} />
                 <StatCard label="Bonus meter fill rate" value={pct(result.bonusAgg.meterFillRate)} sub="% rounds earning +2 spins" />
                 <StatCard label="Total extra spin events" value={result.bonusAgg.totalExtraSpinEvents.toLocaleString()} />
                 <StatCard label="Rounds with extra spins" value={pct(result.bonusAgg.roundsWithExtraSpins / result.bonusAgg.totalRounds * 100)} />

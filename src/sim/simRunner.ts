@@ -118,6 +118,8 @@ export async function runSimulation(
   const nMultiplierAgg: Record<string, MultiplierEntry> = {}
   let nMegaWildCount = 0
   let nMegaWildPayout = 0
+  let nTransmutationCount = 0
+  let nTransmutationPayout = 0
   let nBaseWinTotal = 0
   let nMultiplierContrib = 0
   let nTotalWildSpawns = 0
@@ -156,6 +158,7 @@ export async function runSimulation(
     mergeSymbolWins(nSymbolAgg, spin.symbolWins)
     mergeMultiplierData(nMultiplierAgg, spin.multiplierData)
     if (spin.megaWildTriggered) { nMegaWildCount++; nMegaWildPayout += spin.megaWildPayout }
+    if (spin.transmutationTriggered) { nTransmutationCount++; nTransmutationPayout += spin.transmutationPayout }
     for (const [, v] of Object.entries(spin.multiplierData)) nMultiplierContrib += v.contribution
     nTotalWildSpawns += spin.wildSpawnsTotal
     nTotalChains += spin.chainCount
@@ -202,18 +205,13 @@ export async function runSimulation(
   const bMultiplierAgg: Record<string, MultiplierEntry> = {}
   let bMegaWildCount = 0
   let bMegaWildPayout = 0
+  let bTransmutationCount = 0
+  let bTransmutationPayout = 0
   let bMultiplierContrib = 0
   let bTotalBaseWin = 0
   let bTotalFreeSpins = 0
-  let bTotalMaxRows = 0
   let bMeterFillEvents = 0
   let bRoundsWithExtraSpins = 0
-  const bRowUnlockTotals: Record<number, { count: number; winSum: number }> = {
-    0: { count: 0, winSum: 0 },
-    1: { count: 0, winSum: 0 },
-    2: { count: 0, winSum: 0 },
-    3: { count: 0, winSum: 0 },
-  }
   const bWinDist: WinBuckets = { zero: 0, micro: 0, small: 0, medium: 0, large: 0, big: 0, huge: 0 }
 
   const bonusCount = isTimeBased ? Infinity : config.bonusSpins
@@ -236,14 +234,11 @@ export async function runSimulation(
     mergeSymbolWins(bSymbolAgg, bonus.symbolWins)
     mergeMultiplierData(bMultiplierAgg, bonus.multiplierData)
     if (bonus.megaWildCount > 0) { bMegaWildCount += bonus.megaWildCount; bMegaWildPayout += bonus.megaWildPayout }
+    if (bonus.transmutationCount > 0) { bTransmutationCount += bonus.transmutationCount; bTransmutationPayout += bonus.transmutationPayout }
     for (const [, v] of Object.entries(bonus.multiplierData)) bMultiplierContrib += v.contribution
     bTotalBaseWin += bonus.totalWin - bonus.megaWildPayout  // approximate base
     bTotalFreeSpins += bonus.freeSpinsUsed
-    bTotalMaxRows += bonus.maxRowsReached
     if (bonus.meterFillEvents > 0) { bMeterFillEvents += bonus.meterFillEvents; bRoundsWithExtraSpins++ }
-    const rows = bonus.rowsUnlockedFinal
-    bRowUnlockTotals[rows].count++
-    bRowUnlockTotals[rows].winSum += bonus.totalWin
     winBucket(bonus.totalWin, bWinDist)
 
     const runningMean = bonusWinSum / n
@@ -276,6 +271,9 @@ export async function runSimulation(
     megaWildCount: nMegaWildCount,
     megaWildPayout: nMegaWildPayout,
     megaWildPayoutPct: normalWinSum > 0 ? (nMegaWildPayout / normalWinSum) * 100 : 0,
+    transmutationCount: nTransmutationCount,
+    transmutationPayout: nTransmutationPayout,
+    transmutationPayoutPct: normalWinSum > 0 ? (nTransmutationPayout / normalWinSum) * 100 : 0,
     totalMultiplierContribution: nMultiplierContrib,
     multiplierContributionPct: normalWinSum > 0 ? (nMultiplierContrib / normalWinSum) * 100 : 0,
     chainDist: Object.entries(nChainCounts)
@@ -300,16 +298,12 @@ export async function runSimulation(
     megaWildCount: bMegaWildCount,
     megaWildPayout: bMegaWildPayout,
     megaWildPayoutPct: bonusWinSum > 0 ? (bMegaWildPayout / bonusWinSum) * 100 : 0,
+    transmutationCount: bTransmutationCount,
+    transmutationPayout: bTransmutationPayout,
+    transmutationPayoutPct: bonusWinSum > 0 ? (bTransmutationPayout / bonusWinSum) * 100 : 0,
     totalMultiplierContribution: bMultiplierContrib,
     multiplierContributionPct: bonusWinSum > 0 ? (bMultiplierContrib / bonusWinSum) * 100 : 0,
-    rowUnlockDist: [0, 1, 2, 3].map(r => ({
-      rows: r,
-      count: bRowUnlockTotals[r].count,
-      pct: (bRowUnlockTotals[r].count / Math.max(1, actualBonusSpins)) * 100,
-      avgWin: bRowUnlockTotals[r].count > 0 ? bRowUnlockTotals[r].winSum / bRowUnlockTotals[r].count : 0,
-    })),
     avgFreeSpinsUsed: bTotalFreeSpins / Math.max(1, actualBonusSpins),
-    avgMaxRows: bTotalMaxRows / Math.max(1, actualBonusSpins),
     meterFillRate: (bRoundsWithExtraSpins / Math.max(1, actualBonusSpins)) * 100,
     totalExtraSpinEvents: bMeterFillEvents,
     roundsWithExtraSpins: bRoundsWithExtraSpins,

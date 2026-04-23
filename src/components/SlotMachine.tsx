@@ -8,6 +8,7 @@ import {
   MULTIPLIER_WEIGHTS,
   NORMAL_MULTIPLIER_CHANCE,
   BONUS_MULTIPLIER_CHANCE,
+  STICKY_MULTIPLIER_CAP,
   FRUIT_METER_MAX,
   FRUIT_METER_BREAKPOINTS,
   WILDS_PER_BREAKPOINT,
@@ -16,7 +17,6 @@ import {
   BONUS_WILDS_PER_BREAKPOINT,
   COLS,
   BASE_ROWS,
-  MAX_BONUS_ROWS,
   MIN_CLUSTER_SIZE,
   BET_AMOUNT,
 } from '../config'
@@ -25,7 +25,7 @@ import {
 import type { SlotMachineProps } from '../types'
 
 // Utility imports
-import { isMultiplier, isWild, isMegaWild, isWildcard, getMultiplierValue } from '../utils/helpers'
+import { isMultiplier, isWild, isMegaWild, isWildcard, isTransmutation, getMultiplierValue } from '../utils/helpers'
 
 // Audio imports
 import { soundManager, playWinSound, playBonusSound } from '../audio'
@@ -36,6 +36,7 @@ import {
   randomBonusSymbol,
   findClusters,
   getMegaWildBonusCells,
+  getTransmutationCells,
   generateGrid,
   generateBonusGrid,
   spawnWilds,
@@ -61,10 +62,9 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
   const [bonusMode, setBonusMode] = useState(false)
   const [freeSpins, setFreeSpins] = useState(0)
   const freeSpinsRef = useRef(0)
-  const [unlockedRows, setUnlockedRows] = useState(0)  // Extra rows unlocked (0-3)
-  const unlockedRowsRef = useRef(0)
   const [bonusTotalWin, setBonusTotalWin] = useState(0)
   const bonusTotalWinRef = useRef(0)
+  const stickyMultipliersRef = useRef<Map<string, string>>(new Map())
 
   // Fruit meter state (Tome of Madness style bonus trigger)
   const [fruitMeter, setFruitMeter] = useState(0)
@@ -99,10 +99,6 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
     freeSpinsRef.current = freeSpins
   }, [freeSpins])
 
-  useEffect(() => {
-    unlockedRowsRef.current = unlockedRows
-  }, [unlockedRows])
-
   // Update autoSpinRef when autoSpin changes
   useEffect(() => {
     autoSpinRef.current = autoSpin
@@ -133,10 +129,9 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
     setBonusMode(true)
     setFreeSpins(10)
     freeSpinsRef.current = 10 // Update ref immediately
-    setUnlockedRows(0)
-    unlockedRowsRef.current = 0 // Reset ref too
     setBonusTotalWin(0)
     bonusTotalWinRef.current = 0 // Reset ref too
+    stickyMultipliersRef.current = new Map()
     // Generate a fresh grid for bonus mode with BASE_ROWS
     setGrid(generateGrid(BASE_ROWS))
     setMessage('BONUS MODE! 10 Free Spins!')
@@ -169,25 +164,31 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
     let currentMeterValue = 0
     setFruitMeter(0)
 
-    // Use ref to get current unlocked rows (state may be stale in async callback)
-    const activeRows = BASE_ROWS + unlockedRowsRef.current
+    const activeRows = BASE_ROWS
 
     // Generate final grid with current active rows (bonus mode includes 2x multipliers)
     let currentGrid = generateBonusGrid(activeRows)
 
-    // Start with all columns spinning (show multipliers during spin for excitement)
-    const spinningGrid: string[][] = Array(COLS).fill(null).map(() =>
-      Array(activeRows).fill(null).map(() => randomBonusSymbol())
-    )
-    setGrid(spinningGrid)
+    // Overlay sticky multipliers accumulated from previous spins in this bonus round
+    for (const [pos, sym] of stickyMultipliersRef.current) {
+      const [c, r] = pos.split('-').map(Number)
+      if (r < activeRows) currentGrid[c][r] = sym
+    }
+
+    // Sticky cells stay locked in place during spin; only non-sticky cells cycle randomly
+    const spinCol = (colIdx: number): string[] =>
+      Array(activeRows).fill(null).map((_, rowIdx) =>
+        stickyMultipliersRef.current.get(`${colIdx}-${rowIdx}`) ?? randomBonusSymbol()
+      )
+
+    // Start with all columns spinning
+    setGrid(Array(COLS).fill(null).map((_, colIdx) => spinCol(colIdx)))
 
     // Initial spin for 0.5 seconds before settling starts
     const initialSpinStart = Date.now()
     while (Date.now() - initialSpinStart < 500) {
       await new Promise(resolve => setTimeout(resolve, 25))
-      setGrid(Array(COLS).fill(null).map(() =>
-        Array(activeRows).fill(null).map(() => randomBonusSymbol())
-      ))
+      setGrid(Array(COLS).fill(null).map((_, colIdx) => spinCol(colIdx)))
     }
 
     // Settle columns one at a time from left to right
@@ -203,7 +204,7 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
         setGrid(prev => {
           const newGrid = prev.map((c, i) => {
             if (i < col) return [...c]
-            return Array(activeRows).fill(null).map(() => randomBonusSymbol())
+            return spinCol(i)
           })
           return newGrid
         })
@@ -214,7 +215,7 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
         const newGrid = prev.map((c, i) => {
           if (i === col) return [...currentGrid[col]]
           if (i < col) return [...c]
-          return Array(activeRows).fill(null).map(() => randomBonusSymbol())
+          return spinCol(i)
         })
         return newGrid
       })
@@ -227,13 +228,24 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
     setSpinning(false)
     soundManager.stopSpin()
 
+    // Finale spin: when this was the last spin (newSpinCount === 0), pre-seed 5 wilds
+    if (newSpinCount === 0) {
+      setMessage('⚡ FINALE SPIN! Bonus wilds incoming!')
+      soundManager.playBonusLand()
+      await new Promise(resolve => setTimeout(resolve, 600))
+      const { newGrid: finaleGrid, spawnedPositions } = spawnWilds(currentGrid, 5, activeRows)
+      currentGrid = finaleGrid
+      setGrid(currentGrid)
+      setMultiplierSpawnPositions(spawnedPositions)
+      await new Promise(resolve => setTimeout(resolve, 700))
+      setMultiplierSpawnPositions([])
+    }
+
     // Now process cascades with fruit meter (bonus mode - filling meter adds +5 spins)
     let totalWin = 0
     let chain = 0
     let addedSpins = false
     let previousMeterValue = 0
-    let rowsToUnlock = 0  // Track rows to unlock based on meter milestones
-
     // Cascade loop - same as normal play, just with bigger meter target
     while (true) {
       const clusters = findClusters(currentGrid, MIN_CLUSTER_SIZE, activeRows)
@@ -298,6 +310,42 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
         })
       }
 
+      // Handle transmutation: upgrade all matching symbols one tier
+      const transResult = getTransmutationCells(currentGrid, expandedClusters, activeRows)
+      if (transResult) {
+        const { originalSymbol, upgradedSymbol, positions: transCells } = transResult
+        for (let col = 0; col < COLS; col++) {
+          for (let row = 0; row < activeRows; row++) {
+            if (currentGrid[col][row] === originalSymbol) currentGrid[col][row] = upgradedSymbol
+          }
+        }
+        expandedClusters = expandedClusters.map(cluster => {
+          let hasT = false
+          for (const k of cluster) {
+            const [c, r] = k.split('-').map(Number)
+            if (isTransmutation(currentGrid[c][r])) { hasT = true; break }
+          }
+          if (!hasT) return cluster
+          const expanded = new Set(cluster)
+          transCells.forEach(p => { expanded.add(p); allMatchedMap.set(p, upgradedSymbol); allMatchedSet.add(p) })
+          return expanded
+        })
+        setGrid(currentGrid.map(col => [...col]))
+      }
+
+      // Record sticky multipliers from winning clusters (persists across spins in this bonus round)
+      for (const cluster of expandedClusters) {
+        for (const k of cluster) {
+          const [c, r] = k.split('-').map(Number)
+          const sym = currentGrid[c][r]
+          if (isMultiplier(sym)) {
+              if (stickyMultipliersRef.current.has(k) || stickyMultipliersRef.current.size < STICKY_MULTIPLIER_CAP) {
+                stickyMultipliersRef.current.set(k, sym)
+              }
+            }
+        }
+      }
+
       // Show matches with symbol info (original clusters for display)
       setMatches(allMatchedMap)
 
@@ -318,7 +366,9 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
 
       // Display message with multiplier info
       const meterPercent = Math.round((Math.min(currentMeterValue, BONUS_FRUIT_METER_MAX) / BONUS_FRUIT_METER_MAX) * 100)
-      if (hasMegaWild) {
+      if (transResult) {
+        setMessage(`🌀 TRANSMUTATION! ${transResult.originalSymbol}→${transResult.upgradedSymbol}! +£${clusterWin.toFixed(2)} | Meter: ${meterPercent}%`)
+      } else if (hasMegaWild) {
         setMessage(`🔮 MEGA WILD! +£${clusterWin.toFixed(2)} | Meter: ${meterPercent}%`)
       } else if (clusterMultipliers.length > 0) {
         const multTotal = clusterMultipliers.reduce((a, b) => a + b, 0)
@@ -343,10 +393,6 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
       const wildsToSpawn = newBreakpointIndices
         .filter(idx => idx < BONUS_FRUIT_METER_BREAKPOINTS.length - 1) // Don't spawn on final breakpoint (that's +5 spins)
         .reduce((sum, idx) => sum + BONUS_WILDS_PER_BREAKPOINT[idx], 0)
-
-      // Row unlocks happen at breakpoints 0, 1, 2 (25, 50, 75) - one row per breakpoint
-      const rowUnlockBreakpoints = newBreakpointIndices.filter(idx => idx < 3) // indices 0,1,2 = breakpoints 25,50,75
-      rowsToUnlock += rowUnlockBreakpoints.length
 
       // Wait to show the match
       const hasMultiplier = clusterMultipliers.length > 0
@@ -412,20 +458,6 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
 
     // Reset meter at end of spin (no overflow)
     setFruitMeter(0)
-
-    // Unlock rows based on meter milestones (25, 50, 75)
-    // Use ref to get accurate current value
-    if (rowsToUnlock > 0 && unlockedRowsRef.current < MAX_BONUS_ROWS) {
-      const currentUnlocked = unlockedRowsRef.current
-      const newUnlocked = Math.min(currentUnlocked + rowsToUnlock, MAX_BONUS_ROWS)
-      if (newUnlocked > currentUnlocked) {
-        const rowsGained = newUnlocked - currentUnlocked
-        // Update ref immediately so next spin sees it
-        unlockedRowsRef.current = newUnlocked
-        setUnlockedRows(newUnlocked)
-        setMessage(prevMsg => prevMsg + ` ${rowsGained} ROW${rowsGained > 1 ? 'S' : ''} UNLOCKED! (${newUnlocked + BASE_ROWS} rows)`)
-      }
-    }
 
     spinningRef.current = false
 
@@ -502,8 +534,6 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
       soundManager.setBonusMode(false) // Switch back to normal music
       setBonusTotalWin(0)
       bonusTotalWinRef.current = 0 // Reset ref too
-      setUnlockedRows(0)
-      unlockedRowsRef.current = 0 // Reset ref too
       setFruitMeter(0)
       setMessage(`BONUS COMPLETE! Total: £${finalWin.toFixed(2)}`)
       setGrid(generateGrid(BASE_ROWS))
@@ -686,6 +716,29 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
           })
         }
 
+        // Handle transmutation: upgrade all matching symbols one tier
+        const transResult = getTransmutationCells(currentGrid, expandedClusters, BASE_ROWS)
+        if (transResult) {
+          const { originalSymbol, upgradedSymbol, positions: transCells } = transResult
+          for (let col = 0; col < COLS; col++) {
+            for (let row = 0; row < BASE_ROWS; row++) {
+              if (currentGrid[col][row] === originalSymbol) currentGrid[col][row] = upgradedSymbol
+            }
+          }
+          expandedClusters = expandedClusters.map(cluster => {
+            let hasT = false
+            for (const k of cluster) {
+              const [c, r] = k.split('-').map(Number)
+              if (isTransmutation(currentGrid[c][r])) { hasT = true; break }
+            }
+            if (!hasT) return cluster
+            const expanded = new Set(cluster)
+            transCells.forEach(p => { expanded.add(p); allMatchedMap.set(p, upgradedSymbol); allMatchedSet.add(p) })
+            return expanded
+          })
+          setGrid(currentGrid.map(col => [...col]))
+        }
+
         // Show matches with symbol info (original clusters for display)
         setMatches(allMatchedMap)
 
@@ -706,7 +759,9 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
 
         // Display message with meter progress
         const meterPercent = Math.round((currentMeterValue / FRUIT_METER_MAX) * 100)
-        if (hasMegaWild) {
+        if (transResult) {
+          setMessage(`🌀 TRANSMUTATION! ${transResult.originalSymbol}→${transResult.upgradedSymbol}! +£${clusterWin.toFixed(2)} | Meter: ${meterPercent}%`)
+        } else if (hasMegaWild) {
           setMessage(`🔮 MEGA WILD! +£${clusterWin.toFixed(2)} | Meter: ${meterPercent}%`)
         } else if (clusterMultipliers.length > 0) {
           const multTotal = clusterMultipliers.reduce((a, b) => a + b, 0)
@@ -888,17 +943,11 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
   }, [balance, bonusMode, onBalanceChange, minWinForAudio, fruitMeter, BIG_WIN_THRESHOLD])
 
   // Convert column-based grid to row-based for display
-  const activeRows = bonusMode ? BASE_ROWS + unlockedRows : BASE_ROWS
-  const totalDisplayRows = bonusMode ? BASE_ROWS + MAX_BONUS_ROWS : BASE_ROWS
+  const activeRows = BASE_ROWS
   const displayRows: (string | null)[][] = []
 
-  for (let row = 0; row < totalDisplayRows; row++) {
-    if (row < activeRows && grid[0] && row < grid[0].length) {
-      displayRows.push(grid.map(col => col[row] || null))
-    } else {
-      // Locked row - show null/empty
-      displayRows.push(Array(COLS).fill(null))
-    }
+  for (let row = 0; row < activeRows; row++) {
+    displayRows.push(grid.map(col => (col[row] ?? null)))
   }
 
   return (
@@ -1009,9 +1058,6 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
           </span>
           <span className="bonus-total-display">
             BONUS WIN: £{bonusTotalWin.toFixed(2)}
-          </span>
-          <span className="rows-display">
-            ROWS: {activeRows}/{BASE_ROWS + MAX_BONUS_ROWS}
           </span>
         </div>
       )}
@@ -1503,8 +1549,7 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
               <table className="payout-table">
                 <tbody>
                   <tr><td>Starting Free Spins</td><td>10</td></tr>
-                  <tr><td>Grid Size</td><td>{COLS} × {BASE_ROWS} (expandable to {COLS} × {BASE_ROWS + MAX_BONUS_ROWS})</td></tr>
-                  <tr><td>Row Unlock Condition</td><td>Meter milestones 25, 50, 75</td></tr>
+                  <tr><td>Grid Size</td><td>{COLS} × {BASE_ROWS}</td></tr>
                   <tr><td>Multiplier Frequency</td><td>{(BONUS_MULTIPLIER_CHANCE * 100).toFixed(1)}% per cell ({(BONUS_MULTIPLIER_CHANCE / NORMAL_MULTIPLIER_CHANCE).toFixed(1)}× normal rate)</td></tr>
                   <tr><td>20x Multiplier</td><td>Available (bonus only)</td></tr>
                 </tbody>

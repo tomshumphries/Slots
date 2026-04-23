@@ -11,15 +11,15 @@ import {
   BONUS_FRUIT_METER_BREAKPOINTS,
   BONUS_WILDS_PER_BREAKPOINT,
   BASE_ROWS,
-  MAX_BONUS_ROWS,
   MIN_CLUSTER_SIZE,
+  STICKY_MULTIPLIER_CAP,
 } from '../config'
 
 import { generateGrid, generateBonusGrid, cascadeGrid, spawnWilds } from './gridOperations'
-import { findClusters, getMegaWildBonusCells } from './clusterDetection'
+import { findClusters, getMegaWildBonusCells, getTransmutationCells } from './clusterDetection'
 import { getClusterWinDetail } from './winCalculation'
 import { getNewBreakpointIndices } from './meterHelpers'
-import { isWildcard, isMegaWild } from '../utils/helpers'
+import { isWildcard, isMegaWild, isMultiplier, isTransmutation } from '../utils/helpers'
 
 // ── Per-spin data structures ─────────────────────────────────────────────────
 
@@ -45,6 +45,8 @@ export interface SpinResult {
   multiplierData: Record<string, MultiplierEntry>
   megaWildTriggered: boolean
   megaWildPayout: number
+  transmutationTriggered: boolean
+  transmutationPayout: number
   clusterSizes: number[]
   wildSpawnsTotal: number
   baseWin: number         // total win without any multipliers
@@ -53,14 +55,14 @@ export interface SpinResult {
 export interface BonusResult {
   totalWin: number
   freeSpinsUsed: number
-  maxRowsReached: number
   perSpinWins: number[]
-  rowsUnlockedFinal: number   // 0-3
   meterFillEvents: number     // how many +2 spin awards in this round
   symbolWins: Record<string, SymbolWinEntry>
   multiplierData: Record<string, MultiplierEntry>
   megaWildCount: number
   megaWildPayout: number
+  transmutationCount: number
+  transmutationPayout: number
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -104,6 +106,8 @@ export function resolveSpin(): SpinResult {
   let bonusTriggered = false
   let megaWildTriggered = false
   let megaWildPayout = 0
+  let transmutationTriggered = false
+  let transmutationPayout = 0
   let wildSpawnsTotal = 0
   const symbolWins: Record<string, SymbolWinEntry> = {}
   const multiplierData: Record<string, MultiplierEntry> = {}
@@ -151,6 +155,29 @@ export function resolveSpin(): SpinResult {
         megaWildBonus.positions.forEach(p => allMatchedSet.add(p))
       }
 
+      // Handle transmutation: upgrade all matching symbols one tier
+      const transResult = getTransmutationCells(currentGrid, expandedClusters, BASE_ROWS)
+      if (transResult) {
+        const { originalSymbol, upgradedSymbol, positions: transCells } = transResult
+        for (let c = 0; c < currentGrid.length; c++) {
+          for (let r = 0; r < BASE_ROWS; r++) {
+            if (currentGrid[c][r] === originalSymbol) currentGrid[c][r] = upgradedSymbol
+          }
+        }
+        expandedClusters = expandedClusters.map(cluster => {
+          let hasT = false
+          for (const k of cluster) {
+            const [c, r] = k.split('-').map(Number)
+            if (isTransmutation(currentGrid[c][r])) { hasT = true; break }
+          }
+          if (!hasT) return cluster
+          const expanded = new Set(cluster)
+          transCells.forEach(p => expanded.add(p))
+          return expanded
+        })
+        transCells.forEach(p => allMatchedSet.add(p))
+      }
+
       // Per-cluster stats + win total using getClusterWinDetail
       for (const cluster of expandedClusters) {
         const d = getClusterWinDetail(currentGrid, cluster)
@@ -164,6 +191,7 @@ export function resolveSpin(): SpinResult {
             addMultiplierData(multiplierData, d.multiplierValues, d.win, d.baseWin)
           }
           if (d.hasMegaWild) megaWildPayout += d.win
+          if (d.hasTransmutation) { transmutationTriggered = true; transmutationPayout += d.win }
         }
       }
 
@@ -194,7 +222,7 @@ export function resolveSpin(): SpinResult {
   return {
     totalWin, bonusTriggered, chainCount: chain, finalMeter: currentMeterValue,
     meterPeakBP, symbolWins, multiplierData, megaWildTriggered, megaWildPayout,
-    clusterSizes, wildSpawnsTotal, baseWin,
+    transmutationTriggered, transmutationPayout, clusterSizes, wildSpawnsTotal, baseWin,
   }
 }
 
@@ -203,27 +231,41 @@ export function resolveSpin(): SpinResult {
 export function resolveBonusRound(): BonusResult {
   let freeSpins = 10
   let totalWin = 0
-  let unlockedRows = 0
   const perSpinWins: number[] = []
-  let maxRowsReached = BASE_ROWS
   let meterFillEvents = 0
   const symbolWins: Record<string, SymbolWinEntry> = {}
   const multiplierData: Record<string, MultiplierEntry> = {}
   let megaWildCount = 0
   let megaWildPayout = 0
+  let transmutationCount = 0
+  let transmutationPayout = 0
+
+  // Sticky multipliers: positions that had multipliers in winning clusters this bonus round
+  const stickyMultipliers = new Map<string, string>()
 
   while (freeSpins > 0) {
     freeSpins--
 
-    const activeRows = BASE_ROWS + unlockedRows
-    maxRowsReached = Math.max(maxRowsReached, activeRows)
+    const activeRows = BASE_ROWS
 
     let currentGrid = generateBonusGrid(activeRows)
+
+    // Overlay sticky multipliers from previous spins
+    for (const [pos, sym] of stickyMultipliers) {
+      const [c, r] = pos.split('-').map(Number)
+      if (r < activeRows) currentGrid[c][r] = sym
+    }
+
+    // Finale spin: last spin always gets 5 pre-seeded wilds
+    if (freeSpins === 0) {
+      const { newGrid: finaleGrid } = spawnWilds(currentGrid, 5, activeRows)
+      currentGrid = finaleGrid
+    }
+
     let currentMeterValue = 0
     let previousMeterValue = 0
     let spinWin = 0
     let addedSpins = false
-    let rowsToUnlock = 0
 
     while (true) {
       const clusters = findClusters(currentGrid, MIN_CLUSTER_SIZE, activeRows)
@@ -262,6 +304,29 @@ export function resolveBonusRound(): BonusResult {
         megaWildBonus.positions.forEach(p => allMatchedSet.add(p))
       }
 
+      // Handle transmutation: upgrade all matching symbols one tier
+      const transResult = getTransmutationCells(currentGrid, expandedClusters, activeRows)
+      if (transResult) {
+        const { originalSymbol, upgradedSymbol, positions: transCells } = transResult
+        for (let c = 0; c < currentGrid.length; c++) {
+          for (let r = 0; r < activeRows; r++) {
+            if (currentGrid[c][r] === originalSymbol) currentGrid[c][r] = upgradedSymbol
+          }
+        }
+        expandedClusters = expandedClusters.map(cluster => {
+          let hasT = false
+          for (const k of cluster) {
+            const [c, r] = k.split('-').map(Number)
+            if (isTransmutation(currentGrid[c][r])) { hasT = true; break }
+          }
+          if (!hasT) return cluster
+          const expanded = new Set(cluster)
+          transCells.forEach(p => expanded.add(p))
+          return expanded
+        })
+        transCells.forEach(p => allMatchedSet.add(p))
+      }
+
       for (const cluster of expandedClusters) {
         const d = getClusterWinDetail(currentGrid, cluster)
         spinWin += d.win
@@ -274,6 +339,21 @@ export function resolveBonusRound(): BonusResult {
           if (d.hasMegaWild) {
             megaWildCount++
             megaWildPayout += d.win
+          }
+          if (d.hasTransmutation) {
+            transmutationCount++
+            transmutationPayout += d.win
+          }
+        }
+
+        // Record multiplier cells in winning clusters as sticky multipliers (capped)
+        for (const k of cluster) {
+          const [c, r] = k.split('-').map(Number)
+          const sym = currentGrid[c][r]
+          if (isMultiplier(sym)) {
+            if (stickyMultipliers.has(k) || stickyMultipliers.size < STICKY_MULTIPLIER_CAP) {
+              stickyMultipliers.set(k, sym)
+            }
           }
         }
       }
@@ -291,8 +371,6 @@ export function resolveBonusRound(): BonusResult {
         .filter(idx => idx < BONUS_FRUIT_METER_BREAKPOINTS.length - 1)
         .reduce((sum, idx) => sum + BONUS_WILDS_PER_BREAKPOINT[idx], 0)
 
-      rowsToUnlock += newBPIndices.filter(idx => idx < 3).length
-
       const { newGrid } = cascadeGrid(currentGrid, allMatchedSet, activeRows, true)
       currentGrid = newGrid
 
@@ -302,17 +380,14 @@ export function resolveBonusRound(): BonusResult {
       }
     }
 
-    if (rowsToUnlock > 0) {
-      unlockedRows = Math.min(unlockedRows + rowsToUnlock, MAX_BONUS_ROWS)
-    }
-
     totalWin += spinWin
     perSpinWins.push(spinWin)
   }
 
   return {
-    totalWin, freeSpinsUsed: perSpinWins.length, maxRowsReached,
-    perSpinWins, rowsUnlockedFinal: unlockedRows, meterFillEvents,
+    totalWin, freeSpinsUsed: perSpinWins.length,
+    perSpinWins, meterFillEvents,
     symbolWins, multiplierData, megaWildCount, megaWildPayout,
+    transmutationCount, transmutationPayout,
   }
 }

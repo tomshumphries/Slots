@@ -17,5 +17,8 @@ export const MULTIPLIER_WEIGHTS: Record<MultiplierValue, number> = {
 // Normal play: ~0.5% chance per cell that it will be a multiplier symbol
 export const NORMAL_MULTIPLIER_CHANCE = 0.005
 
-// Bonus mode: ~3.2% chance per cell — 6.4× normal, makes the bonus feel distinctly richer
-export const BONUS_MULTIPLIER_CHANCE = 0.032
+// Bonus mode: ~1.5% chance per cell — 3× normal, makes the bonus feel distinctly richer
+export const BONUS_MULTIPLIER_CHANCE = 0.015
+
+// Maximum number of sticky multiplier positions that can accumulate during a bonus round
+export const STICKY_MULTIPLIER_CAP = 8

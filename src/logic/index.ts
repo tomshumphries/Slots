@@ -1,7 +1,7 @@
 // Re-export all logic modules
 
 export { randomSymbol, randomBonusSymbol } from './symbolGeneration'
-export { findClusters, getMegaWildBonusCells } from './clusterDetection'
+export { findClusters, getMegaWildBonusCells, getTransmutationCells } from './clusterDetection'
 export { generateGrid, generateBonusGrid, spawnWilds, cascadeGrid } from './gridOperations'
 export { getClusterSizeMultiplier, calculateClusterWin, getClusterWinDetail } from './winCalculation'
 export type { ClusterWinDetail } from './winCalculation'

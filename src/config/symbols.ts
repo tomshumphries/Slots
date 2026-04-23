@@ -14,6 +14,11 @@ export const MEGA_WILD_SYMBOL = '🔮'
 export const MEGA_WILD_CHANCE_NORMAL = 0.001  // 0.1% in normal play
 export const MEGA_WILD_CHANCE_BONUS = 0.005   // 0.5% in bonus mode
 
+// Transmutation symbol - wildcard that upgrades all matching symbols one tier when it wins
+export const TRANSMUTATION_SYMBOL = '🌀'
+export const TRANSMUTATION_CHANCE_NORMAL = 0.0008  // 0.08% in normal play (slightly rarer than Mega Wild)
+export const TRANSMUTATION_CHANCE_BONUS = 0.004    // 0.4% in bonus mode
+
 // Symbol weights (higher = more common)
 // Total = 100, so percentages
 export const SYMBOL_WEIGHTS: Record<string, number> = {

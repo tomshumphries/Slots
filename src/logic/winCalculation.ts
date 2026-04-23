@@ -1,7 +1,7 @@
 // Win calculation functions
 
 import { SYMBOL_PAYOUTS, BET_AMOUNT } from '../config'
-import { isMultiplier, isWild, isMegaWild, getMultiplierValue } from '../utils/helpers'
+import { isMultiplier, isWild, isMegaWild, isTransmutation, getMultiplierValue } from '../utils/helpers'
 import type { ClusterResult } from '../types'
 
 export function getClusterSizeMultiplier(size: number): number {
@@ -24,6 +24,7 @@ export interface ClusterWinDetail {
   multiplierTotal: number // additive sum (1 if no multipliers)
   hasWild: boolean
   hasMegaWild: boolean
+  hasTransmutation: boolean
 }
 
 export function getClusterWinDetail(grid: string[][], cluster: Set<string>): ClusterWinDetail {
@@ -33,11 +34,13 @@ export function getClusterWinDetail(grid: string[][], cluster: Set<string>): Clu
   const multiplierValues: number[] = []
   let hasWild = false
   let hasMegaWild = false
+  let hasTransmutation = false
 
   for (const cellKey of cluster) {
     const [col, row] = cellKey.split('-').map(Number)
     const symbol = grid[col][row]
     if (isMegaWild(symbol)) { hasMegaWild = true; continue }
+    if (isTransmutation(symbol)) { hasTransmutation = true; continue }
     if (isMultiplier(symbol)) {
       const mult = getMultiplierValue(symbol)
       clusterMultiplier += mult
@@ -58,7 +61,7 @@ export function getClusterWinDetail(grid: string[][], cluster: Set<string>): Clu
     baseWin = basePayout * sizeMult * 1 * BET_AMOUNT
   }
 
-  return { mainSymbol, win, baseWin, size: cluster.size, multiplierValues, multiplierTotal: clusterMultiplier, hasWild, hasMegaWild }
+  return { mainSymbol, win, baseWin, size: cluster.size, multiplierValues, multiplierTotal: clusterMultiplier, hasWild, hasMegaWild, hasTransmutation }
 }
 
 // Aggregate win across all clusters. Used by the game UI.
