@@ -23,8 +23,8 @@ jobs:
         with:
           node-version: 20
           cache: npm
-      - run: npm install
-      - run: npm run build
+      - run: npm ci
+      - run: npx tsc && npx vite build
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
