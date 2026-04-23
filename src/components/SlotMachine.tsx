@@ -80,9 +80,9 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
   const [showBigWin, setShowBigWin] = useState(false)
   const BIG_WIN_THRESHOLD = 20 // £20+ triggers big win celebration
 
-  // Panel visibility
-  const [showInfoCard, setShowInfoCard] = useState(true)
-  const [showAdminPanel, setShowAdminPanel] = useState(true)
+  // Panel visibility — start collapsed on small screens
+  const [showInfoCard, setShowInfoCard] = useState(() => window.innerWidth > 1100)
+  const [showAdminPanel, setShowAdminPanel] = useState(() => window.innerWidth > 900)
 
   // Admin/testing features
   const [autoSpin, setAutoSpin] = useState(false)

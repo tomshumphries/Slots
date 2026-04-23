@@ -295,8 +295,8 @@
   border-bottom: none;
 }
 
-/* Hide info cards on smaller screens */
-@media (max-width: 1400px) {
+/* Info cards hidden below 1100px — panel takes up no space */
+@media (max-width: 1100px) {
   .info-cards-container {
     display: none;
   }
@@ -1289,7 +1289,8 @@
   box-shadow: 0 10px 35px rgba(0, 255, 136, 0.7);
 }
 
-/* Responsive adjustments */
+/* ========== RESPONSIVE ========== */
+
 @media (max-width: 1200px) {
   .cell {
     width: 65px;
@@ -1298,15 +1299,140 @@
   }
 }
 
+/* Tablet — admin panel drops into document flow */
 @media (max-width: 900px) {
+  .admin-panel {
+    position: relative;
+    top: auto;
+    right: auto;
+    width: 100%;
+    min-width: unset;
+    margin-top: 20px;
+    box-sizing: border-box;
+  }
+
   .cell {
-    width: 50px;
-    height: 50px;
+    width: 52px;
+    height: 52px;
     font-size: 2.2rem;
+  }
+
+  .fruit-meter-container {
+    width: 100px;
+  }
+
+  .meter-track,
+  .breakpoint-track {
+    min-height: 200px;
   }
 
   .slot-machine {
     padding: 15px;
+  }
+
+  .spin-btn {
+    padding: 14px 40px;
+    font-size: 1.1rem;
+  }
+}
+
+/* Mobile */
+@media (max-width: 600px) {
+  .slot-machine {
+    padding: 8px;
+    border-radius: 15px;
+    border-width: 2px;
+  }
+
+  .cell {
+    width: 40px;
+    height: 40px;
+    font-size: 1.7rem;
+    border-radius: 6px;
+    border-width: 2px;
+  }
+
+  .grid {
+    padding: 8px;
+    gap: 2px;
+  }
+
+  .row {
+    gap: 2px;
+  }
+
+  .fruit-meter-container {
+    width: 72px;
+  }
+
+  .meter-track,
+  .breakpoint-track {
+    min-height: 160px;
+  }
+
+  .meter-title {
+    font-size: 0.75rem;
+    letter-spacing: 1px;
+  }
+
+  .meter-current {
+    font-size: 1.1rem;
+  }
+
+  .meter-header {
+    padding: 8px 6px 5px;
+  }
+
+  .meter-footer {
+    padding: 6px 8px 10px;
+  }
+
+  .meter-body {
+    padding: 8px 6px;
+    gap: 4px;
+  }
+
+  .game-area {
+    gap: 8px;
+  }
+
+  .spin-btn {
+    padding: 12px 28px;
+    font-size: 1rem;
+    letter-spacing: 1px;
+  }
+
+  .chain-display {
+    font-size: 0.95rem;
+    padding: 7px 14px;
+  }
+
+  .chain-display-container {
+    height: 36px;
+    margin-bottom: 8px;
+  }
+
+  .wild-icon,
+  .multiplier-icon {
+    font-size: 1.4rem;
+  }
+
+  .mega-wild-icon {
+    font-size: 1.5rem;
+  }
+
+  .admin-panel {
+    font-size: 0.8rem;
+    padding: 10px;
+    gap: 7px;
+  }
+
+  .message {
+    font-size: 1rem;
+  }
+
+  .win-display {
+    font-size: 2rem;
   }
 }
 
@@ -1753,7 +1879,8 @@
 @media (max-width: 900px) {
   .bonus-mode-header {
     flex-wrap: wrap;
-    gap: 15px;
+    gap: 10px;
+    padding: 10px 15px;
   }
 
   .free-spins-display,
@@ -1762,16 +1889,36 @@
     font-size: 1rem;
   }
 
-  .multiplier-icon {
-    font-size: 1.4rem;
-  }
-
   .bonus-end-modal {
     padding: 30px 40px;
   }
 
   .win-amount {
     font-size: 2.5rem;
+  }
+}
+
+@media (max-width: 600px) {
+  .bonus-mode-header {
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+
+  .free-spins-display,
+  .bonus-total-display {
+    font-size: 0.9rem;
+  }
+
+  .bonus-end-modal {
+    padding: 20px 25px;
+  }
+
+  .win-amount {
+    font-size: 2rem;
+  }
+
+  .celebration-text {
+    font-size: 1.4rem;
   }
 }
 
@@ -2156,5 +2303,21 @@
 
   .big-win-celebration-text {
     font-size: 1.5rem;
+  }
+}
+
+@media (max-width: 600px) {
+  .big-win-modal {
+    padding: 20px 25px;
+  }
+
+  .big-win-modal h2 {
+    font-size: 1.5rem;
+    letter-spacing: 2px;
+    margin-bottom: 15px;
+  }
+
+  .big-win-amount {
+    font-size: 2.2rem;
   }
 }
