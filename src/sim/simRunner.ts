@@ -9,11 +9,16 @@
 // inline with running totals; no unbounded arrays are grown.
 
 import { resolveSpin, resolveBonusRound } from '../logic/spinResolver'
-import { BET_AMOUNT } from '../config'
+import {
+  BET_AMOUNT, MIN_CLUSTER_SIZE,
+  FRUIT_METER_MAX, FRUIT_METER_BREAKPOINTS, WILDS_PER_BREAKPOINT,
+  BONUS_FRUIT_METER_MAX, BONUS_FRUIT_METER_BREAKPOINTS,
+  NORMAL_MULTIPLIER_CHANCE, BONUS_MULTIPLIER_CHANCE,
+} from '../config'
 import type {
   SimConfig, SimProgress, SimResult, SpinRecord, BonusRecord,
   WinBuckets, AggSymbolStats, AggMultiplierStats,
-  NormalAggregates, BonusAggregates,
+  NormalAggregates, BonusAggregates, MeterFillDist, ConfigSnapshot,
 } from './types'
 import type { SymbolWinEntry, MultiplierEntry } from '../logic/spinResolver'
 
@@ -22,7 +27,9 @@ const MAX_PROGRESS = 200
 const MAX_CHART_PTS = 300
 
 const SYMBOLS = ['🍒', '🍀', '🍇', '🔔', '💎']
-const NORMAL_BP_LABELS = ['Reach 15', 'Reach 30', 'Reach 45', 'BONUS (60)']
+const NORMAL_BP_LABELS = FRUIT_METER_BREAKPOINTS.map((bp, i) =>
+  i === FRUIT_METER_BREAKPOINTS.length - 1 ? `BONUS (${bp})` : `Reach ${bp}`
+)
 
 function chartInterval(total: number) {
   return Math.max(1, Math.floor(total / MAX_CHART_PTS))
@@ -128,6 +135,15 @@ export async function runSimulation(
   const nMeterBPHits = [0, 0, 0, 0]
   const nWinDist: WinBuckets = { zero: 0, micro: 0, small: 0, medium: 0, large: 0, big: 0, huge: 0 }
 
+  // Meter fill distribution
+  const nMeterFillDist: MeterFillDist = { none: 0, low: 0, mid: 0, high: 0, near: 0, full: 0 }
+  let nMeterFillSum = 0
+  // Dry spell tracking
+  let nCurrentZeroStreak = 0
+  let nMaxZeroStreak = 0
+  let nZeroStreakTotal = 0
+  let nZeroStreakCount = 0
+
   const normalStart = Date.now()
 
   // Determine loop bounds — for time mode, we loop until half-time elapses
@@ -170,6 +186,29 @@ export async function runSimulation(
     if (bp >= 2) nMeterBPHits[2]++
     if (bp >= 3) nMeterBPHits[3]++
     winBucket(spin.totalWin, nWinDist)
+
+    // Meter fill distribution
+    const fm = spin.finalMeter
+    nMeterFillSum += fm
+    const fmPct = FRUIT_METER_MAX > 0 ? fm / FRUIT_METER_MAX : 0
+    if (fm === 0)                    nMeterFillDist.none++
+    else if (fmPct <= 0.25)          nMeterFillDist.low++
+    else if (fmPct <= 0.5)           nMeterFillDist.mid++
+    else if (fmPct <= 0.75)          nMeterFillDist.high++
+    else if (fm < FRUIT_METER_MAX)   nMeterFillDist.near++
+    else                             nMeterFillDist.full++
+
+    // Dry spell tracking
+    if (spin.totalWin === 0) {
+      nCurrentZeroStreak++
+      if (nCurrentZeroStreak > nMaxZeroStreak) nMaxZeroStreak = nCurrentZeroStreak
+    } else {
+      if (nCurrentZeroStreak > 0) {
+        nZeroStreakTotal += nCurrentZeroStreak
+        nZeroStreakCount++
+        nCurrentZeroStreak = 0
+      }
+    }
 
     const runningMean = normalWinSum / n
     if (n % normalChartEvery === 0) normalSeries.push({ i: n, runningMean })
@@ -263,6 +302,12 @@ export async function runSimulation(
 
   // ── Finalize aggregates ───────────────────────────────────────────────────
 
+  // Flush any open zero streak at end
+  if (nCurrentZeroStreak > 0) {
+    nZeroStreakTotal += nCurrentZeroStreak
+    nZeroStreakCount++
+  }
+
   const normalAgg: NormalAggregates = {
     totalSpins: actualNormalSpins,
     winDist: nWinDist,
@@ -288,6 +333,10 @@ export async function runSimulation(
     avgChainsPerSpin: nTotalChains / actualNormalSpins,
     pctZeroWin: (nWinDist.zero / actualNormalSpins) * 100,
     pctPositiveReturn: ((actualNormalSpins - nWinDist.zero - nWinDist.micro) / actualNormalSpins) * 100,
+    avgFinalMeter: nMeterFillSum / actualNormalSpins,
+    meterFillDist: nMeterFillDist,
+    maxConsecutiveZeroWins: nMaxZeroStreak,
+    avgZeroWinRunLength: nZeroStreakCount > 0 ? nZeroStreakTotal / nZeroStreakCount : 0,
   }
 
   const bonusAgg: BonusAggregates = {
@@ -317,11 +366,24 @@ export async function runSimulation(
   const safeLabel = config.label.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 40)
   const runId = `sim-${timestamp.slice(0, 10)}_${timestamp.slice(11, 16).replace(':', '-')}_${safeLabel}`
 
+  const configSnapshot: ConfigSnapshot = {
+    normalMeterMax: FRUIT_METER_MAX,
+    normalBreakpoints: [...FRUIT_METER_BREAKPOINTS],
+    wildsPerBreakpoint: [...WILDS_PER_BREAKPOINT],
+    bonusMeterMax: BONUS_FRUIT_METER_MAX,
+    bonusBreakpoints: [...BONUS_FRUIT_METER_BREAKPOINTS],
+    minClusterSize: MIN_CLUSTER_SIZE,
+    normalMultiplierChance: NORMAL_MULTIPLIER_CHANCE,
+    bonusMultiplierChance: BONUS_MULTIPLIER_CHANCE,
+    betAmount: BET_AMOUNT,
+  }
+
   return {
     meta: {
       runId, timestamp, label: config.label,
       normalSpins: actualNormalSpins, bonusSpins: actualBonusSpins,
       durationMs: totalDurationMs, seed: null,
+      config: configSnapshot,
     },
     summary: {
       pBonus, eNormalWinExclBonus, eBonus, eTotalPerSpin, rtp,

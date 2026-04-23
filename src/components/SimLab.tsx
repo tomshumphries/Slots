@@ -164,6 +164,15 @@ export default function SimLab() {
       localStorage.setItem('sim-results-index', JSON.stringify(updated))
       setSavedRuns(updated)
       setSaveState('saved')
+
+      // In dev mode, also write to sim-results/ in the repo via the Vite dev server API
+      if (import.meta.env.DEV) {
+        fetch('/api/sim-results', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data),
+        }).catch(() => { /* non-critical — file save is best-effort in dev */ })
+      }
     } catch { setSaveState('failed') }
   }, [])
 
@@ -577,21 +586,38 @@ export default function SimLab() {
             <div className="dash-panel">
               <div className="dual-chart-row">
                 <div className="chart-col">
-                  <h3>Bonus meter tier hit rates — normal play</h3>
-                  <p className="chart-subtitle">P(meter reaching each breakpoint) per spin. Cumulative — reaching 30 implies reaching 15.</p>
-                  <ResponsiveContainer width="100%" height={220}>
-                    <BarChart data={result.normalAgg.meterBPRates}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#333" />
-                      <XAxis dataKey="label" stroke="#888" tick={{ fontSize: 11 }} />
-                      <YAxis stroke="#888" tickFormatter={v => `${(Number(v) * 100).toFixed(1)}%`} />
-                      <Tooltip formatter={(v) => [`${(Number(v) * 100).toFixed(2)}%`, 'hit rate']} />
-                      <Bar dataKey="rate" fill="#4ade80" radius={[3, 3, 0, 0]}>
-                        <LabelList dataKey="rate" position="top"
-                          formatter={(v: unknown) => `${(Number(v) * 100).toFixed(1)}%`}
-                          style={{ fontSize: 11, fill: '#aaa' }} />
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
+                  <h3>Meter fill distribution — normal play</h3>
+                  <p className="chart-subtitle">Where the meter ends each spin. Avg fill: {result.normalAgg.avgFinalMeter.toFixed(1)} / {result.meta.config?.normalMeterMax ?? '?'}</p>
+                  {(() => {
+                    const dist = result.normalAgg.meterFillDist
+                    const total = result.normalAgg.totalSpins
+                    const meterMax = result.meta.config?.normalMeterMax ?? 40
+                    const q = Math.round(meterMax * 0.25)
+                    const mfd = [
+                      { name: 'None (0)', pct: (dist.none / total) * 100, fill: '#6b7280' },
+                      { name: `Low (1–${q})`, pct: (dist.low / total) * 100, fill: '#3b82f6' },
+                      { name: `Mid (${q+1}–${q*2})`, pct: (dist.mid / total) * 100, fill: '#8b5cf6' },
+                      { name: `High (${q*2+1}–${q*3})`, pct: (dist.high / total) * 100, fill: '#f59e0b' },
+                      { name: `Near (${q*3+1}–${meterMax-1})`, pct: (dist.near / total) * 100, fill: '#ef4444' },
+                      { name: `Full (${meterMax})`, pct: (dist.full / total) * 100, fill: '#4ade80' },
+                    ]
+                    return (
+                      <ResponsiveContainer width="100%" height={220}>
+                        <BarChart data={mfd}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#333" />
+                          <XAxis dataKey="name" stroke="#888" tick={{ fontSize: 10 }} />
+                          <YAxis stroke="#888" tickFormatter={v => `${v.toFixed(0)}%`} />
+                          <Tooltip formatter={(v) => [`${Number(v).toFixed(2)}%`, '% of spins']} />
+                          <Bar dataKey="pct" radius={[3, 3, 0, 0]}>
+                            {mfd.map(d => <Cell key={d.name} fill={d.fill} />)}
+                            <LabelList dataKey="pct" position="top"
+                              formatter={(v: unknown) => Number(v) > 1 ? `${Number(v).toFixed(1)}%` : ''}
+                              style={{ fontSize: 10, fill: '#aaa' }} />
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    )
+                  })()}
                 </div>
 
                 <div className="chart-col">
@@ -609,13 +635,56 @@ export default function SimLab() {
                 </div>
               </div>
 
+              <div className="dual-chart-row" style={{ marginTop: 8 }}>
+                <div className="chart-col">
+                  <h3>Breakpoint hit rates — normal play</h3>
+                  <p className="chart-subtitle">P(meter reaching each tier) per spin — cumulative.</p>
+                  <ResponsiveContainer width="100%" height={200}>
+                    <BarChart data={result.normalAgg.meterBPRates}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#333" />
+                      <XAxis dataKey="label" stroke="#888" tick={{ fontSize: 11 }} />
+                      <YAxis stroke="#888" tickFormatter={v => `${(Number(v) * 100).toFixed(1)}%`} />
+                      <Tooltip formatter={(v) => [`${(Number(v) * 100).toFixed(2)}%`, 'hit rate']} />
+                      <Bar dataKey="rate" fill="#4ade80" radius={[3, 3, 0, 0]}>
+                        <LabelList dataKey="rate" position="top"
+                          formatter={(v: unknown) => `${(Number(v) * 100).toFixed(1)}%`}
+                          style={{ fontSize: 11, fill: '#aaa' }} />
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+
+                {result.meta.config && (
+                  <div className="chart-col">
+                    <h3>Config snapshot</h3>
+                    <p className="chart-subtitle">Parameters active during this run.</p>
+                    <table className="sim-table" style={{ marginTop: 8 }}>
+                      <tbody>
+                        <tr><td>Meter max (normal)</td><td>{result.meta.config.normalMeterMax}</td></tr>
+                        <tr><td>Breakpoints (normal)</td><td>{result.meta.config.normalBreakpoints.join(', ')}</td></tr>
+                        <tr><td>Wilds per breakpoint</td><td>{result.meta.config.wildsPerBreakpoint.join(', ')}</td></tr>
+                        <tr><td>Meter max (bonus)</td><td>{result.meta.config.bonusMeterMax}</td></tr>
+                        <tr><td>Breakpoints (bonus)</td><td>{result.meta.config.bonusBreakpoints.join(', ')}</td></tr>
+                        <tr><td>Min cluster size</td><td>{result.meta.config.minClusterSize}</td></tr>
+                        <tr><td>Multiplier chance (normal)</td><td>{pct(result.meta.config.normalMultiplierChance * 100)}</td></tr>
+                        <tr><td>Multiplier chance (bonus)</td><td>{pct(result.meta.config.bonusMultiplierChance * 100)}</td></tr>
+                        <tr><td>Bet amount</td><td>£{result.meta.config.betAmount.toFixed(2)}</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
               <div className="sim-stat-grid" style={{ marginTop: 16 }}>
+                <StatCard label="Avg meter fill / spin" value={result.normalAgg.avgFinalMeter.toFixed(2)} sub={`of ${result.meta.config?.normalMeterMax ?? '?'} max`} />
                 <StatCard label="Avg chains / spin" value={result.normalAgg.avgChainsPerSpin.toFixed(3)} />
                 <StatCard label="Avg wild spawns / spin" value={result.normalAgg.avgWildSpawnsPerSpin.toFixed(3)} />
                 <StatCard label="Bonus trigger rate" value={pct(result.summary.pBonus * 100)} sub={`1 in ${(1 / result.summary.pBonus).toFixed(0)} spins`} />
-                <StatCard label="P(meter reaches 15)" value={pct((result.normalAgg.meterBPRates[0] ? result.normalAgg.meterBPRates[0].rate * 100 : 0))} />
-                <StatCard label="P(meter reaches 30)" value={pct((result.normalAgg.meterBPRates[1] ? result.normalAgg.meterBPRates[1].rate * 100 : 0))} />
-                <StatCard label="P(meter reaches 45)" value={pct((result.normalAgg.meterBPRates[2] ? result.normalAgg.meterBPRates[2].rate * 100 : 0))} />
+                <StatCard label="Longest zero-win streak" value={result.normalAgg.maxConsecutiveZeroWins.toLocaleString()} sub="spins" />
+                <StatCard label="Avg zero-win run" value={result.normalAgg.avgZeroWinRunLength.toFixed(1)} sub="spins before a win" />
+                {result.normalAgg.meterBPRates.map(bp => (
+                  <StatCard key={bp.label} label={`P(${bp.label})`} value={pct(bp.rate * 100)} />
+                ))}
               </div>
             </div>
           )}

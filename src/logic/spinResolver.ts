@@ -122,13 +122,13 @@ export function resolveSpin(): SpinResult {
 
       chain++
 
-      let matchedSymbolCount = 0
       const allMatchedSet = new Set<string>()
       for (const cluster of clusters) {
-        cluster.forEach(cell => { allMatchedSet.add(cell); matchedSymbolCount++ })
+        cluster.forEach(cell => allMatchedSet.add(cell))
       }
 
-      currentMeterValue = Math.min(currentMeterValue + matchedSymbolCount, FRUIT_METER_MAX)
+      // Use unique cell count so shared wildcards aren't double-counted
+      currentMeterValue = Math.min(currentMeterValue + allMatchedSet.size, FRUIT_METER_MAX)
       peakMeter = Math.max(peakMeter, currentMeterValue)
 
       const megaWildBonus = getMegaWildBonusCells(currentGrid, clusters, BASE_ROWS)
@@ -229,7 +229,7 @@ export function resolveSpin(): SpinResult {
 // ── Bonus round ──────────────────────────────────────────────────────────────
 
 export function resolveBonusRound(): BonusResult {
-  let freeSpins = 10
+  let freeSpins = 8
   let totalWin = 0
   const perSpinWins: number[] = []
   let meterFillEvents = 0
@@ -242,6 +242,10 @@ export function resolveBonusRound(): BonusResult {
 
   // Sticky multipliers: positions that had multipliers in winning clusters this bonus round
   const stickyMultipliers = new Map<string, string>()
+
+  // Meter persists across all free spins; fills award +2 spins then reset
+  let currentMeterValue = 0
+  let previousMeterValue = 0
 
   while (freeSpins > 0) {
     freeSpins--
@@ -262,24 +266,20 @@ export function resolveBonusRound(): BonusResult {
       currentGrid = finaleGrid
     }
 
-    let currentMeterValue = 0
-    let previousMeterValue = 0
     let spinWin = 0
-    let addedSpins = false
 
     while (true) {
       const clusters = findClusters(currentGrid, MIN_CLUSTER_SIZE, activeRows)
       if (clusters.length === 0) break
 
-      let matchedSymbolCount = 0
       const allMatchedSet = new Set<string>()
       for (const cluster of clusters) {
-        cluster.forEach(cell => { allMatchedSet.add(cell); matchedSymbolCount++ })
+        cluster.forEach(cell => allMatchedSet.add(cell))
       }
 
       previousMeterValue = currentMeterValue
-      currentMeterValue = currentMeterValue + matchedSymbolCount
-      const cappedMeter = Math.min(currentMeterValue, BONUS_FRUIT_METER_MAX)
+      // Use unique cell count so shared wildcards aren't double-counted
+      currentMeterValue = currentMeterValue + allMatchedSet.size
 
       const megaWildBonus = getMegaWildBonusCells(currentGrid, clusters, activeRows)
       let expandedClusters = clusters
@@ -358,18 +358,20 @@ export function resolveBonusRound(): BonusResult {
         }
       }
 
-      if (cappedMeter >= BONUS_FRUIT_METER_MAX && !addedSpins) {
-        addedSpins = true
-        meterFillEvents++
-        freeSpins += 2
-      }
-
+      // BP detection uses raw (pre-reset) meter value to catch all crossings
       const newBPIndices = getNewBreakpointIndices(
         currentMeterValue, previousMeterValue, BONUS_FRUIT_METER_BREAKPOINTS
       )
       const wildsToSpawn = newBPIndices
         .filter(idx => idx < BONUS_FRUIT_METER_BREAKPOINTS.length - 1)
         .reduce((sum, idx) => sum + BONUS_WILDS_PER_BREAKPOINT[idx], 0)
+
+      // Fill detection: award +2 spins and reset meter (can trigger multiple times)
+      while (currentMeterValue >= BONUS_FRUIT_METER_MAX) {
+        meterFillEvents++
+        freeSpins += 2
+        currentMeterValue -= BONUS_FRUIT_METER_MAX
+      }
 
       // Sticky multipliers stay fixed during cascade
       const stickyKeys = new Set(stickyMultipliers.keys())

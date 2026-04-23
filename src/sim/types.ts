@@ -73,6 +73,16 @@ export interface ChainEntry {
   pct: number
 }
 
+// Distribution of how full the meter gets each spin, split by quartile of FRUIT_METER_MAX
+export interface MeterFillDist {
+  none: number    // finalMeter == 0
+  low: number     // 0 < finalMeter <= 25% of max
+  mid: number     // 25-50%
+  high: number    // 50-75%
+  near: number    // 75% to < 100%
+  full: number    // finalMeter == max (bonus triggered)
+}
+
 export interface NormalAggregates {
   totalSpins: number
   winDist: WinBuckets
@@ -92,6 +102,12 @@ export interface NormalAggregates {
   avgChainsPerSpin: number
   pctZeroWin: number
   pctPositiveReturn: number   // % spins that returned >= bet amount
+  // Meter calibration
+  avgFinalMeter: number         // average meter value reached per spin
+  meterFillDist: MeterFillDist
+  // Dry spell analysis
+  maxConsecutiveZeroWins: number
+  avgZeroWinRunLength: number   // average length of consecutive zero-win streaks
 }
 
 export interface BonusAggregates {
@@ -115,6 +131,18 @@ export interface BonusAggregates {
 
 // ── Final result ──────────────────────────────────────────────────────────────
 
+export interface ConfigSnapshot {
+  normalMeterMax: number
+  normalBreakpoints: number[]
+  wildsPerBreakpoint: number[]
+  bonusMeterMax: number
+  bonusBreakpoints: number[]
+  minClusterSize: number
+  normalMultiplierChance: number
+  bonusMultiplierChance: number
+  betAmount: number
+}
+
 export interface SimResult {
   meta: {
     runId: string
@@ -124,6 +152,7 @@ export interface SimResult {
     bonusSpins: number
     durationMs: number
     seed: null
+    config: ConfigSnapshot
   }
   summary: {
     pBonus: number

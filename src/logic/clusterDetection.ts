@@ -75,7 +75,13 @@ export function findClusters(
       const localVisited = new Set<string>()
       floodFill(col, row, symbol, cluster, localVisited)
 
-      if (cluster.size >= minSize) {
+      // Count only regular (non-wildcard) cells — wildcards bridge clusters but don't count toward minimum
+      const regularCellCount = [...cluster].filter(key => {
+        const [c, r] = key.split('-').map(Number)
+        return !isWildcard(grid[c][r])
+      }).length
+
+      if (regularCellCount >= minSize) {
         clusters.push(cluster)
 
         // Only mark REGULAR symbols as assigned (they can't be reused)

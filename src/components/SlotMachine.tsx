@@ -65,6 +65,7 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
   const [bonusTotalWin, setBonusTotalWin] = useState(0)
   const bonusTotalWinRef = useRef(0)
   const stickyMultipliersRef = useRef<Map<string, string>>(new Map())
+  const bonusMeterRef = useRef(0)
 
   // Fruit meter state (Tome of Madness style bonus trigger)
   const [fruitMeter, setFruitMeter] = useState(0)
@@ -131,19 +132,21 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
   const startBonusMode = useCallback(() => {
     setShowBonusModal(false)
     setBonusMode(true)
-    setFreeSpins(10)
-    freeSpinsRef.current = 10 // Update ref immediately
+    setFreeSpins(8)
+    freeSpinsRef.current = 8 // Update ref immediately
     setBonusTotalWin(0)
     bonusTotalWinRef.current = 0 // Reset ref too
     stickyMultipliersRef.current = new Map()
+    bonusMeterRef.current = 0
+    setFruitMeter(0)
     // Generate a fresh grid for bonus mode with BASE_ROWS
     setGrid(generateGrid(BASE_ROWS))
-    setMessage('BONUS MODE! 10 Free Spins!')
+    setMessage('BONUS MODE! 8 Free Spins!')
     // Switch to intense bonus music
     soundManager.setBonusMode(true)
   }, [])
 
-  // Bonus spin function (with fruit meter - filling it adds +5 spins)
+  // Bonus spin function — fruit meter accumulates across all free spins; filling to max awards +2 spins then resets
   const bonusSpin = useCallback(async () => {
     // Use ref to check free spins (state may be stale in callback)
     if (freeSpinsRef.current <= 0 || spinningRef.current) return
@@ -164,9 +167,8 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
     setChainCount(0)
     setSettledCols(0)
 
-    // Reset meter to 0 at start of each spin (same as normal play)
-    let currentMeterValue = 0
-    setFruitMeter(0)
+    // Meter carries over from previous spins — read from ref so it persists across bonusSpin calls
+    let currentMeterValue = bonusMeterRef.current
 
     const activeRows = BASE_ROWS
 
@@ -248,9 +250,8 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
     // Now process cascades with fruit meter (bonus mode - filling meter adds +5 spins)
     let totalWin = 0
     let chain = 0
-    let addedSpins = false
-    let previousMeterValue = 0
-    // Cascade loop - same as normal play, just with bigger meter target
+    let previousMeterValue = currentMeterValue
+    // Cascade loop — meter accumulates per round, filling to max resets and awards +2 spins
     while (true) {
       const clusters = findClusters(currentGrid, MIN_CLUSTER_SIZE, activeRows)
 
@@ -263,7 +264,6 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
       soundManager.playMatch()
 
       // Count matched symbols for meter (original clusters only)
-      let matchedSymbolCount = 0
       const allMatchedMap = new Map<string, string>()
       const allMatchedSet = new Set<string>()
 
@@ -278,15 +278,17 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
           }
         }
         cluster.forEach(cell => {
-          allMatchedMap.set(cell, clusterSymbol)
+          const [col, row] = cell.split('-').map(Number)
+          const sym = currentGrid[col][row]
+          // Wildcards use a neutral key so they don't inherit cluster colour
+          allMatchedMap.set(cell, isWildcard(sym) ? 'wild' : clusterSymbol)
           allMatchedSet.add(cell)
-          matchedSymbolCount++
         })
       }
 
-      // Update fruit meter with ORIGINAL cluster count only (not mega wild bonus)
+      // Update fruit meter: use unique cell count so shared wildcards aren't double-counted
       previousMeterValue = currentMeterValue
-      currentMeterValue = currentMeterValue + matchedSymbolCount
+      currentMeterValue = currentMeterValue + allMatchedSet.size
       setFruitMeter(Math.min(currentMeterValue, BONUS_FRUIT_METER_MAX))
 
       // Check for mega wild bonus cells BEFORE calculating win
@@ -381,22 +383,22 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
         setMessage(`Cascade ${chain}! +£${clusterWin.toFixed(2)} | Meter: ${meterPercent}%`)
       }
 
-      // Check for +2 spins (meter filled)
-      if (currentMeterValue >= BONUS_FRUIT_METER_MAX && !addedSpins) {
-        addedSpins = true
-        // Update ref immediately so async code sees correct value
+      // BP detection uses raw (pre-reset) meter value to catch all crossings
+      const newBreakpointIndices = getNewBreakpointIndices(currentMeterValue, previousMeterValue, BONUS_FRUIT_METER_BREAKPOINTS)
+      const wildsToSpawn = newBreakpointIndices
+        .filter(idx => idx < BONUS_FRUIT_METER_BREAKPOINTS.length - 1) // last BP triggers +2 spins, not wilds
+        .reduce((sum, idx) => sum + BONUS_WILDS_PER_BREAKPOINT[idx], 0)
+
+      // Fill detection: reset meter and award +2 spins each time it fills (can happen multiple times)
+      while (currentMeterValue >= BONUS_FRUIT_METER_MAX) {
+        currentMeterValue -= BONUS_FRUIT_METER_MAX
         freeSpinsRef.current += 2
         setFreeSpins(freeSpinsRef.current)
+        setFruitMeter(currentMeterValue) // show post-reset value
         setMessage('+2 FREE SPINS!')
         soundManager.playBonusLand()
         await new Promise(resolve => setTimeout(resolve, 800))
       }
-
-      // Check for breakpoint wild spawns and row unlocks
-      const newBreakpointIndices = getNewBreakpointIndices(currentMeterValue, previousMeterValue, BONUS_FRUIT_METER_BREAKPOINTS)
-      const wildsToSpawn = newBreakpointIndices
-        .filter(idx => idx < BONUS_FRUIT_METER_BREAKPOINTS.length - 1) // Don't spawn on final breakpoint (that's +5 spins)
-        .reduce((sum, idx) => sum + BONUS_WILDS_PER_BREAKPOINT[idx], 0)
 
       // Wait to show the match
       const hasMultiplier = clusterMultipliers.length > 0
@@ -464,8 +466,8 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
       await new Promise(resolve => setTimeout(resolve, 150))
     }
 
-    // Reset meter at end of spin (no overflow)
-    setFruitMeter(0)
+    // Persist meter value across spins — carry remainder into next bonusSpin call
+    bonusMeterRef.current = currentMeterValue
 
     spinningRef.current = false
 
@@ -670,7 +672,6 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
         soundManager.playMatch()
 
         // Count matched symbols for meter (original clusters only)
-        let matchedSymbolCount = 0
         const allMatchedMap = new Map<string, string>()
         const allMatchedSet = new Set<string>()
 
@@ -686,14 +687,16 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
             }
           }
           cluster.forEach(cell => {
-            allMatchedMap.set(cell, clusterSymbol)
+            const [col, row] = cell.split('-').map(Number)
+            const sym = currentGrid[col][row]
+            // Wildcards use a neutral key so they don't inherit cluster colour
+            allMatchedMap.set(cell, isWildcard(sym) ? 'wild' : clusterSymbol)
             allMatchedSet.add(cell)
-            matchedSymbolCount++
           })
         }
 
-        // Update fruit meter with ORIGINAL cluster count only (not mega wild bonus)
-        currentMeterValue = Math.min(currentMeterValue + matchedSymbolCount, FRUIT_METER_MAX)
+        // Update fruit meter: use unique cell count so shared wildcards aren't double-counted
+        currentMeterValue = Math.min(currentMeterValue + allMatchedSet.size, FRUIT_METER_MAX)
         setFruitMeter(currentMeterValue)
 
         // Check for mega wild bonus cells BEFORE calculating win
@@ -948,7 +951,7 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
         }
       }, 1500)
     }
-  }, [balance, bonusMode, onBalanceChange, minWinForAudio, fruitMeter, BIG_WIN_THRESHOLD])
+  }, [balance, bonusMode, onBalanceChange, minWinForAudio])
 
   // Convert column-based grid to row-based for display
   const activeRows = BASE_ROWS
@@ -1015,16 +1018,16 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
                 <p>Fill the meter to 60 to trigger the bonus and win <strong>10 free spins</strong>!</p>
               </div>
               <div className="info-section">
-                <h4>Expanding Grid</h4>
-                <p>Hit meter milestones (25, 50, 75) to unlock extra rows - up to <strong>8 rows</strong> total!</p>
+                <h4>Wild Spawns</h4>
+                <p>Hit meter milestones (25, 50, 75) to spawn wilds. Fill it completely for <strong>+2 extra spins</strong>!</p>
               </div>
               <div className="info-section">
                 <h4>Better Multipliers</h4>
                 <p>Multipliers appear more often, including the exclusive <strong>20x multiplier</strong>!</p>
               </div>
               <div className="info-section">
-                <h4>Bigger Target</h4>
-                <p>Meter target is <strong>100</strong> (vs 60 in normal). Fill it to earn <strong>+5 Free Spins!</strong></p>
+                <h4>Sticky Multipliers</h4>
+                <p>Any multiplier in a winning cluster sticks in place for all remaining spins!</p>
               </div>
             </div>
           </div>
@@ -1037,8 +1040,8 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
               <p>You have <strong>free spins</strong> - no cost per spin! Use them wisely.</p>
             </div>
             <div className="info-section">
-              <h4>Unlock Rows</h4>
-              <p>Reach meter milestones <strong>25, 50, 75</strong> to unlock extra rows (up to 8 total).</p>
+              <h4>Sticky Multipliers</h4>
+              <p>Any multiplier in a winning cluster <strong>sticks in place</strong> for all remaining bonus spins!</p>
             </div>
             <div className="info-section">
               <h4>More Multipliers</h4>
@@ -1046,17 +1049,17 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
             </div>
             <div className="info-section">
               <h4>Bonus Meter (100)</h4>
-              <p>Larger meter with new breakpoints. Fill it completely to earn <strong>+5 extra spins</strong>!</p>
+              <p>Fill it completely to earn <strong>+2 extra spins</strong>!</p>
               <div className="breakpoint-list">
                 <span>25 → +2⭐</span>
                 <span>50 → +3⭐</span>
                 <span>75 → +4⭐</span>
-                <span>100 → +5 Spins</span>
+                <span>100 → +2 Spins</span>
               </div>
             </div>
             <div className="info-section highlight">
               <h4>Key Mechanic</h4>
-              <p>The meter works just like normal play but with a <strong>bigger target (100)</strong>. Fill it completely to earn <strong>+5 Free Spins!</strong></p>
+              <p>The meter works just like normal play but with a <strong>bigger target (100)</strong>. Fill it completely to earn <strong>+2 Free Spins!</strong></p>
             </div>
           </div>
         ))}
@@ -1552,7 +1555,7 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
                   {BONUS_FRUIT_METER_BREAKPOINTS.map((bp, i) => (
                     <tr key={bp}>
                       <td>{bp} symbols</td>
-                      <td>{i === BONUS_FRUIT_METER_BREAKPOINTS.length - 1 ? '+5 Free Spins' : `+${BONUS_WILDS_PER_BREAKPOINT[i]} ⭐ Wilds`}</td>
+                      <td>{i === BONUS_FRUIT_METER_BREAKPOINTS.length - 1 ? '+2 Free Spins' : `+${BONUS_WILDS_PER_BREAKPOINT[i]} ⭐ Wilds`}</td>
                     </tr>
                   ))}
                 </tbody>
