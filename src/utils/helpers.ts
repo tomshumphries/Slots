@@ -1,7 +1,6 @@
 // Utility helper functions
 
-import { WILD_SYMBOL, MEGA_WILD_SYMBOL, TRANSMUTATION_SYMBOL } from '../config/symbols'
-import { MULTIPLIER_VALUES } from '../config/multipliers'
+import { WILD_SYMBOL, MEGA_WILD_SYMBOL, TRANSMUTATION_SYMBOL, MULTIPLIER_VALUES } from '../config'
 
 // Helper to check if symbol is a multiplier
 export function isMultiplier(symbol: string): boolean {

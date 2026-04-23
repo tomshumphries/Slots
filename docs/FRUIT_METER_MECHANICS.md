@@ -1,90 +1,62 @@
-# Fruit Meter Mechanics Documentation
+# Fruit Meter Mechanics
 
 ## Overview
 
-The fruit meter is a Tome of Madness-style progression system that fills as clusters are matched. Both Normal Play and Bonus Mode now work the same way - just with different target values.
+The fruit meter is a Tome of Madness-style progression system. It fills as clusters are matched during cascades. Crossing a breakpoint spawns wilds onto the grid; filling the meter to its maximum triggers a major reward.
+
+> **Authoritative values** live in `GAME_CONFIG.fruitMeter` in [`src/config/gameConfig.ts`](../src/config/gameConfig.ts). The numbers below are for reference — do not edit them here independently.
 
 ---
 
-## Constants
+## Current Values
 
 ### Normal Play
-- `FRUIT_METER_MAX = 60`
-- `FRUIT_METER_BREAKPOINTS = [15, 30, 45, 60]`
-- `WILDS_PER_BREAKPOINT = [2, 3, 4, 0]` (9 wilds total before bonus triggers)
+
+| Constant | Value |
+|----------|-------|
+| Max | 40 |
+| Breakpoints | 10, 20, 30, 40 |
+| Wilds per breakpoint | 2, 3, 4, 0 |
+| Reward at max | Bonus mode triggered |
 
 ### Bonus Mode
-- `BONUS_FRUIT_METER_MAX = 100`
-- `BONUS_FRUIT_METER_BREAKPOINTS = [25, 50, 75, 100]`
-- `BONUS_WILDS_PER_BREAKPOINT = [2, 3, 4, 0]` (9 wilds total before +5 spins)
 
-### Win Calculation
-- **No chain multipliers** - cascades fill the meter but don't multiply wins
-- **Cluster size multipliers** are the primary scaling factor
-- **Symbol multipliers** (2x-20x) provide additional win boosts
+| Constant | Value |
+|----------|-------|
+| Max | 50 |
+| Breakpoints | 12, 25, 38, 50 |
+| Wilds per breakpoint | 2, 3, 4, 0 |
+| Reward at max | +2 free spins |
 
----
-
-## Meter Behavior (Both Modes)
-
-Both Normal Play and Bonus Mode now work identically:
-
-### Start of Spin
-1. Meter is reset to 0
-
-### During Cascades
-1. Find clusters of 7+ matching symbols
-2. Count matched symbols
-3. Add to meter (capped at max)
-4. Update visual
-5. Check for breakpoints → spawn wilds
-6. Check for full meter → trigger reward (bonus or +5 spins)
-7. Cascade (remove matches, drop tiles, fill from top)
-8. Repeat until no more matches
-
-### End of Spin
-1. Meter resets to 0 (no overflow carries over)
+The `0` wilds at the final breakpoint is intentional — that slot triggers the reward rather than spawning wilds.
 
 ---
 
-## Normal Play Flow
+## Behavior
+
+### Normal Play
+
+The meter accumulates across all cascades within a single spin. It **does not reset between cascades** — only between spins. Crossing a breakpoint spawns wilds immediately, which can trigger further cascades. Filling the meter to max triggers bonus mode; the current value carries over as overfill at the start of bonus.
 
 ```
 Spin starts: meter = 0
-Match 20 symbols: meter = 20
-Check breakpoints: passed 15 → spawn 2 wilds
+Match 14 symbols → meter = 14 (no breakpoint yet)
 Cascade...
-Match 15 more: meter = 35
-Check breakpoints: passed 30 → spawn 3 wilds
+Match 8 more → meter = 22, crossed BP 10 → spawn 2 wilds, crossed BP 20 → spawn 3 wilds
 Cascade...
-Match 10 more: meter = 45
-Check breakpoints: passed 45 → spawn 4 wilds
-Cascade...
-Match 20 more: meter = 60
-Check breakpoints: passed 60 → BONUS TRIGGERED!
-Spin ends: meter resets to 0
+Match 20 more → meter = 42, crossed BP 30 → spawn 4 wilds, crossed BP 40 → BONUS TRIGGERED
 ```
 
----
+### Bonus Mode
 
-## Bonus Mode Flow
-
-Same as normal play, but breakpoints also unlock extra rows:
+The meter **resets to 0 at the start of every free spin**. Only one fill event is awarded per spin (capped to prevent runaway feedback with sticky multipliers). Filling the meter awards +2 free spins then resets.
 
 ```
-Spin starts: meter = 0
-Match 30 symbols: meter = 30
-Check breakpoints: passed 25 → spawn 2 wilds + UNLOCK ROW 1
+Free spin starts: meter = 0
+Match 15 symbols → meter = 15, crossed BP 12 → spawn 2 wilds
 Cascade...
-Match 25 more: meter = 55
-Check breakpoints: passed 50 → spawn 3 wilds + UNLOCK ROW 2
-Cascade...
-Match 25 more: meter = 80
-Check breakpoints: passed 75 → spawn 4 wilds + UNLOCK ROW 3
-Cascade...
-Match 25 more: meter = 100
-Check breakpoints: passed 100 → +5 FREE SPINS!
-Spin ends: meter resets to 0
+Match 40 more → meter = 55 ≥ 50 → +2 FREE SPINS awarded, meter resets
+Spin ends
 ```
 
 ---
@@ -93,21 +65,20 @@ Spin ends: meter resets to 0
 
 | Aspect | Normal Play | Bonus Mode |
 |--------|-------------|------------|
-| Meter Max | 60 | 100 |
-| Breakpoints | 15, 30, 45, 60 | 25, 50, 75, 100 |
+| Max | 40 | 50 |
+| Breakpoints | 10, 20, 30, 40 | 12, 25, 38, 50 |
 | Wilds per BP | 2, 3, 4, 0 | 2, 3, 4, 0 |
-| Row Unlocks | N/A | At 25, 50, 75 (1 row each) |
-| Reset at spin start | YES (to 0) | YES (to 0) |
-| Reset at spin end | YES (to 0) | YES (to 0) |
-| Final reward | Trigger Bonus | +5 Free Spins |
+| Resets between cascades | No | No |
+| Resets between spins | Yes | Yes (each free spin) |
+| Overfill carries over | Yes → into bonus | No |
+| Final reward | Bonus triggered | +2 free spins |
+| Reward cap per spin | N/A | Once per free spin |
 
 ---
 
 ## Key Points
 
-1. **Both modes work the same** - just different target values
-2. **No overflow** - meter always resets to 0 between spins
-3. **No mid-spin consumption** - meter accumulates continuously
-4. **Wilds spawn immediately** when breakpoints are passed during cascades
-5. **Breakpoints can only be hit once per spin** - no repeating
-6. **Row unlocks in bonus mode** - first 3 breakpoints (25, 50, 75) unlock 1 extra row each (max 3 extra rows = 8 total)
+1. Meter accumulates continuously within a spin — it does not reset between cascades
+2. Breakpoints can only be crossed once per spin (direction: upward only)
+3. Wilds spawn immediately when a breakpoint is crossed, which can trigger further cascades
+4. In bonus mode, the fill reward is capped to once per spin to prevent exponential spin accumulation with sticky multipliers

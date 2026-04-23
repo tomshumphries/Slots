@@ -4,6 +4,7 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LabelList,
 } from 'recharts'
 import './SimLab.css'
+import { GAME_CONFIG } from '../config'
 import type { SimConfig, SimProgress, SimResult, RunMode } from '../sim/types'
 
 type RunState = 'idle' | 'running' | 'done' | 'error' | 'cancelled'
@@ -20,7 +21,7 @@ interface SavedRunMeta {
   ciHalfWidthPercent: number
 }
 
-const TARGET_RTP = 95
+const TARGET_RTP = GAME_CONFIG.simulation.targetRtpPercent
 const SYMBOL_COLORS: Record<string, string> = {
   '🍒': '#ef4444', '🍀': '#22c55e', '🍇': '#a855f7', '🔔': '#eab308', '💎': '#3b82f6',
 }
@@ -46,9 +47,9 @@ const WIN_BUCKET_KEYS: (keyof SimResult['normalAgg']['winDist'])[] = ['zero', 'm
 export default function SimLab() {
   const [label, setLabel] = useState('baseline')
   const [runMode, setRunMode] = useState<RunMode>('count')
-  const [normalSpins, setNormalSpins] = useState(10_000)
-  const [bonusSpins, setBonusSpins] = useState(1_000)
-  const [timeLimitSecs, setTimeLimitSecs] = useState(30)
+  const [normalSpins, setNormalSpins] = useState(GAME_CONFIG.simulation.defaults.normalSpins)
+  const [bonusSpins, setBonusSpins] = useState(GAME_CONFIG.simulation.defaults.bonusRounds)
+  const [timeLimitSecs, setTimeLimitSecs] = useState(GAME_CONFIG.simulation.defaults.timeLimitSeconds)
 
   const [runState, setRunState] = useState<RunState>('idle')
   const [progress, setProgress] = useState<SimProgress | null>(null)
@@ -247,7 +248,7 @@ export default function SimLab() {
         ) : (
           <div className="saved-runs-list">
             {savedRuns.map(run => {
-              const rtpGood = run.rtpPercent >= 92 && run.rtpPercent <= 98
+              const rtpGood = run.rtpPercent >= GAME_CONFIG.simulation.rtpHealthyRange.min && run.rtpPercent <= GAME_CONFIG.simulation.rtpHealthyRange.max
               const isLoaded = result?.meta.runId === run.runId
               return (
                 <div key={run.runId} className={`saved-run-row${isLoaded ? ' active' : ''}`}>
@@ -300,7 +301,7 @@ export default function SimLab() {
           <>
             <div className="sim-field">
               <label>Normal spins</label>
-              <input type="number" min={100} max={10_000_000} step={1000} value={normalSpins}
+              <input type="number" min={100} max={GAME_CONFIG.simulation.maxNormalSpins} step={1000} value={normalSpins}
                 onChange={e => setNormalSpins(Number(e.target.value))} disabled={runState === 'running'} />
             </div>
             <div className="sim-field">
@@ -403,6 +404,30 @@ export default function SimLab() {
                 <StatCard label="Bonus RTP contribution" value={pct((result.summary.pBonus * result.summary.eBonus / result.summary.eTotalPerSpin) * 100)} sub="% of total EV from bonus" />
               </div>
 
+              {result.meta.stalledBonusSeeds?.length > 0 && (
+                <div className="stalled-seeds-panel">
+                  <div className="stalled-seeds-title">
+                    ⚠ Runaway bonus rounds detected ({result.meta.stalledBonusSeeds.length})
+                  </div>
+                  <p className="stalled-seeds-desc">
+                    These bonus rounds hit the 500-spin safety cap and were aborted.
+                    Paste a seed into the Admin panel in the slot machine to replay it.
+                  </p>
+                  <div className="stalled-seeds-list">
+                    {result.meta.stalledBonusSeeds.map(s => (
+                      <code
+                        key={s}
+                        className="stalled-seed-chip"
+                        title="Click to copy"
+                        onClick={() => navigator.clipboard.writeText(String(s))}
+                      >
+                        {s}
+                      </code>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div className="sim-save-row">
                 {saveState === 'saving' && <span className="save-status saving">Saving…</span>}
                 {saveState === 'saved' && <span className="save-status saved">Saved to browser ✓ <button className="sim-btn sim-btn-save" onClick={() => exportRun(result.meta.runId)}>↓ Export JSON</button></span>}
@@ -444,26 +469,57 @@ export default function SimLab() {
                 </div>
 
                 <div className="chart-col">
-                  <h3>Bonus round win distribution</h3>
-                  <p className="chart-subtitle">{result.bonusAgg.totalRounds.toLocaleString()} rounds — % of rounds in each win bracket</p>
-                  <ResponsiveContainer width="100%" height={240}>
-                    <BarChart data={WIN_BUCKET_KEYS.map((k, i) => ({
-                      name: WIN_BUCKET_LABELS[i],
-                      pct: (result.bonusAgg.winDist[k] / Math.max(1, result.bonusAgg.totalRounds)) * 100,
-                    }))}>
+                  <h3>Bonus win distribution</h3>
+                  <p className="chart-subtitle">{result.bonusAgg.totalRounds.toLocaleString()} rounds — dynamic bins to P99, tail bucket shaded</p>
+                  <ResponsiveContainer width="100%" height={220}>
+                    <BarChart data={result.bonusAgg.bonusWinHistogram ?? []}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#333" />
-                      <XAxis dataKey="name" stroke="#888" tick={{ fontSize: 11 }} />
+                      <XAxis dataKey="label" stroke="#888" tick={{ fontSize: 9 }} angle={-30} textAnchor="end" height={42} />
                       <YAxis stroke="#888" tickFormatter={v => `${v.toFixed(0)}%`} />
-                      <Tooltip formatter={(v) => [`${Number(v).toFixed(2)}%`, '% of rounds']} />
-                      <Bar dataKey="pct" fill="#f59e0b" radius={[3, 3, 0, 0]}>
-                        <LabelList dataKey="pct" position="top" formatter={(v: unknown) => Number(v) > 1 ? `${Number(v).toFixed(1)}%` : ''} style={{ fontSize: 10, fill: '#aaa' }} />
+                      <Tooltip formatter={(v, _n, p) => [`${Number(v).toFixed(2)}%  (${(p.payload as {count:number}).count?.toLocaleString()} rounds)`, 'frequency']} />
+                      <Bar dataKey="pct" radius={[3, 3, 0, 0]}>
+                        {(result.bonusAgg.bonusWinHistogram ?? []).map((bk, i) => (
+                          <Cell key={i} fill={bk.label.endsWith('+') ? '#78716c' : '#f59e0b'} />
+                        ))}
                       </Bar>
                     </BarChart>
                   </ResponsiveContainer>
                   <div className="dist-stats">
-                    <span>Avg win: £{(result.summary.eBonus).toFixed(2)}</span>
-                    <span>Avg free spins: {result.bonusAgg.avgFreeSpinsUsed.toFixed(1)}</span>
+                    <span>Min £{(result.bonusAgg.bonusWinMin ?? 0).toFixed(2)}</span>
+                    <span>P25 £{(result.bonusAgg.bonusWinP25 ?? 0).toFixed(2)}</span>
+                    <span>Median £{(result.bonusAgg.bonusWinMedian ?? 0).toFixed(2)}</span>
+                    <span>P75 £{(result.bonusAgg.bonusWinP75 ?? 0).toFixed(2)}</span>
+                    <span>P95 £{(result.bonusAgg.bonusWinP95 ?? 0).toFixed(2)}</span>
+                    <span>σ £{(result.bonusAgg.bonusWinStdDev ?? 0).toFixed(2)}</span>
                   </div>
+                  {(result.bonusAgg.bonusWinTopNWithSeeds ?? result.bonusAgg.bonusWinTopN ?? []).length > 0 && (
+                    <div style={{ marginTop: 10 }}>
+                      <p style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>
+                        Top {(result.bonusAgg.bonusWinTopNWithSeeds ?? result.bonusAgg.bonusWinTopN).length} wins — click seed to copy
+                      </p>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        {(result.bonusAgg.bonusWinTopNWithSeeds
+                          ? result.bonusAgg.bonusWinTopNWithSeeds
+                          : result.bonusAgg.bonusWinTopN.map(win => ({ win, seed: null }))
+                        ).map((entry, i) => (
+                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{ fontSize: 12, color: i === 0 ? '#fbbf24' : '#d1d5db', fontVariantNumeric: 'tabular-nums', minWidth: 90 }}>
+                              #{i + 1} £{entry.win.toFixed(2)}
+                            </span>
+                            {entry.seed != null && (
+                              <code
+                                style={{ fontSize: 11, background: '#1c1917', border: '1px solid #44403c', borderRadius: 4, padding: '1px 6px', cursor: 'pointer', color: '#a3a3a3' }}
+                                title="Click to copy seed"
+                                onClick={() => navigator.clipboard.writeText(String(entry.seed))}
+                              >
+                                seed: {entry.seed}
+                              </code>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -693,7 +749,7 @@ export default function SimLab() {
           {activeTab === 'bonus' && (
             <div className="dash-panel">
               <div className="sim-stat-grid" style={{ marginTop: 16 }}>
-                <StatCard label="Avg free spins / round" value={result.bonusAgg.avgFreeSpinsUsed.toFixed(2)} sub="10 base + extras" />
+                <StatCard label="Avg free spins / round" value={result.bonusAgg.avgFreeSpinsUsed.toFixed(2)} sub="8 base + extras" />
                 <StatCard label="Bonus meter fill rate" value={pct(result.bonusAgg.meterFillRate)} sub="% rounds earning +2 spins" />
                 <StatCard label="Total extra spin events" value={result.bonusAgg.totalExtraSpinEvents.toLocaleString()} />
                 <StatCard label="Rounds with extra spins" value={pct(result.bonusAgg.roundsWithExtraSpins / result.bonusAgg.totalRounds * 100)} />

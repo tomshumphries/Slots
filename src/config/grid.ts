@@ -1,11 +1,2 @@
-// Grid dimensions and game settings
-
-// Grid dimensions
-export const COLS = 12
-export const BASE_ROWS = 5
-
-// Minimum cluster size for a win
-export const MIN_CLUSTER_SIZE = 7
-
-// Bet amount
-export const BET_AMOUNT = 1
+// Consolidated into gameConfig.ts — all values now live there.
+// Named exports are re-exported from index.ts for backwards compatibility.

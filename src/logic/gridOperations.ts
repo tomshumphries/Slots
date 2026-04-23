@@ -3,19 +3,20 @@
 import { COLS, BASE_ROWS, WILD_SYMBOL } from '../config'
 import { isWildcard } from '../utils/helpers'
 import { randomSymbol, randomBonusSymbol } from './symbolGeneration'
+import type { Rng } from './rng'
 import type { CascadeResult, SpawnResult } from '../types'
 
 // Generate a random grid with specified row count
-export function generateGrid(rowCount: number = BASE_ROWS): string[][] {
+export function generateGrid(rowCount: number = BASE_ROWS, rng: Rng = Math.random): string[][] {
   return Array(COLS).fill(null).map(() =>
-    Array(rowCount).fill(null).map(() => randomSymbol(false))
+    Array(rowCount).fill(null).map(() => randomSymbol(false, rng))
   )
 }
 
 // Generate a bonus mode grid (includes multipliers)
-export function generateBonusGrid(rowCount: number): string[][] {
+export function generateBonusGrid(rowCount: number, rng: Rng = Math.random): string[][] {
   return Array(COLS).fill(null).map(() =>
-    Array(rowCount).fill(null).map(() => randomBonusSymbol())
+    Array(rowCount).fill(null).map(() => randomBonusSymbol(rng))
   )
 }
 
@@ -24,7 +25,8 @@ export function generateBonusGrid(rowCount: number): string[][] {
 export function spawnWilds(
   grid: string[][],
   count: number,
-  activeRows: number
+  activeRows: number,
+  rng: Rng = Math.random
 ): SpawnResult {
   const newGrid = grid.map(col => [...col])
   const spawnedPositions: string[] = []
@@ -41,7 +43,7 @@ export function spawnWilds(
 
   // Shuffle and pick random positions
   for (let i = validPositions.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1))
+    const j = Math.floor(rng() * (i + 1))
     ;[validPositions[i], validPositions[j]] = [validPositions[j], validPositions[i]]
   }
 
@@ -64,7 +66,8 @@ export function cascadeGrid(
   matchedCells: Set<string>,
   activeRows: number = BASE_ROWS,
   isBonusMode: boolean = false,
-  fixedCells: Set<string> = new Set()
+  fixedCells: Set<string> = new Set(),
+  rng: Rng = Math.random
 ): CascadeResult {
   const newGrid = grid.map(col => [...col])
   const movedCells = new Set<string>()
@@ -105,7 +108,7 @@ export function cascadeGrid(
       }
 
       const newSymbols = Array(toRemove.length).fill(null).map(() =>
-        isBonusMode ? randomBonusSymbol() : randomSymbol(false)
+        isBonusMode ? randomBonusSymbol(rng) : randomSymbol(false, rng)
       )
 
       // New symbols at top of segment, remaining compact to bottom

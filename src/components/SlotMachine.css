@@ -110,6 +110,43 @@
   margin: 5px 0;
 }
 
+.admin-seed-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.admin-seed-label {
+  font-size: 0.72rem;
+  color: #aaa;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.admin-seed-input {
+  background: #1a1a2e;
+  border: 1px solid #444;
+  border-radius: 4px;
+  color: #e0e0e0;
+  font-size: 0.8rem;
+  padding: 4px 6px;
+  width: 100%;
+  box-sizing: border-box;
+}
+.admin-seed-input:focus {
+  outline: none;
+  border-color: #7c6af7;
+}
+.admin-seed-last {
+  font-size: 0.72rem;
+  color: #7c6af7;
+  cursor: pointer;
+  word-break: break-all;
+  padding: 2px 0;
+}
+.admin-seed-last:hover {
+  color: #a99ef5;
+  text-decoration: underline;
+}
+
 /* ========== INFO CARDS ========== */
 .info-cards-container {
   position: fixed;
@@ -1732,6 +1769,53 @@
     0 0 10px #ff6b6b,
     0 0 20px #ffd700,
     0 0 30px #00ff88;
+}
+
+/* ========== STICKY MULTIPLIER CHARGE ORBS ========== */
+
+/* Wrapper so icon + orbs stack vertically inside the cell */
+.multiplier-cell-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 100%;
+  height: 100%;
+}
+
+/* Row of three charge orbs shown on every multiplier during bonus mode */
+.charge-orbs {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  justify-content: center;
+}
+
+.orb {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: background 0.25s ease, box-shadow 0.25s ease;
+}
+
+/* Empty orb — multiplier not yet sticky, or charge spent */
+.orb-empty {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1.5px solid rgba(255, 255, 255, 0.22);
+}
+
+/* Filled orb — locked charge remaining */
+.orb-filled {
+  background: radial-gradient(circle at 35% 35%, #fde68a, #f59e0b);
+  border: 1.5px solid #fbbf24;
+  box-shadow: 0 0 5px rgba(251, 191, 36, 0.8), 0 0 10px rgba(251, 191, 36, 0.4);
+}
+
+/* Locked-in sticky: slightly brighter background tint so player knows it's fixed */
+.cell.sticky-mult {
+  filter: brightness(1.12);
 }
 
 /* ========== BONUS END CELEBRATION ========== */

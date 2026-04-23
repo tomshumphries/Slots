@@ -1,16 +1,13 @@
 // Win calculation functions
 
-import { SYMBOL_PAYOUTS, BET_AMOUNT } from '../config'
+import { SYMBOL_PAYOUTS, BET_AMOUNT, GAME_CONFIG } from '../config'
 import { isMultiplier, isWild, isMegaWild, isTransmutation, isWildcard, getMultiplierValue } from '../utils/helpers'
 import type { ClusterResult } from '../types'
 
 export function getClusterSizeMultiplier(size: number): number {
-  if (size >= 25) return 12.0
-  if (size >= 20) return 8.0
-  if (size >= 15) return 5.0
-  if (size >= 12) return 3.0
-  if (size >= 10) return 2.0
-  if (size >= 8) return 1.4
+  for (const tier of GAME_CONFIG.clusters.sizeTiers) {
+    if (size >= tier.minSize) return tier.multiplier
+  }
   return 1.0
 }
 
@@ -62,7 +59,7 @@ export function getClusterWinDetail(grid: string[][], cluster: Set<string>): Clu
   let win = 0
   let baseWin = 0
   if (mainSymbol) {
-    const basePayout = SYMBOL_PAYOUTS[mainSymbol] ?? 0.5
+    const basePayout = SYMBOL_PAYOUTS[mainSymbol] ?? GAME_CONFIG.symbols.defaultPayout
     const sizeMult = getClusterSizeMultiplier(regularCount)
     win = basePayout * sizeMult * clusterMultiplier * BET_AMOUNT
     baseWin = basePayout * sizeMult * 1 * BET_AMOUNT

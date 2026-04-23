@@ -13,6 +13,9 @@ import {
   BASE_ROWS,
   MIN_CLUSTER_SIZE,
   STICKY_MULTIPLIER_CAP,
+  STICKY_MULTIPLIER_CHARGES,
+  SYMBOL_PAYOUTS,
+  GAME_CONFIG,
 } from '../config'
 
 import { generateGrid, generateBonusGrid, cascadeGrid, spawnWilds } from './gridOperations'
@@ -20,6 +23,8 @@ import { findClusters, getMegaWildBonusCells, getTransmutationCells } from './cl
 import { getClusterWinDetail } from './winCalculation'
 import { getNewBreakpointIndices } from './meterHelpers'
 import { isWildcard, isMegaWild, isMultiplier, isTransmutation } from '../utils/helpers'
+import { mulberry32, randomSeed } from './rng'
+import type { Rng } from './rng'
 
 // ── Per-spin data structures ─────────────────────────────────────────────────
 
@@ -50,6 +55,7 @@ export interface SpinResult {
   clusterSizes: number[]
   wildSpawnsTotal: number
   baseWin: number         // total win without any multipliers
+  seed: number            // seed used to produce this spin
 }
 
 export interface BonusResult {
@@ -63,6 +69,8 @@ export interface BonusResult {
   megaWildPayout: number
   transmutationCount: number
   transmutationPayout: number
+  seed: number               // seed used to produce this bonus round
+  aborted: boolean           // true if maxFreeSpins safety cap was hit
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -96,8 +104,11 @@ function addMultiplierData(
 
 // ── Normal spin ──────────────────────────────────────────────────────────────
 
-export function resolveSpin(): SpinResult {
-  let currentGrid = generateGrid()
+export function resolveSpin(seed?: number): SpinResult {
+  const usedSeed = seed ?? randomSeed()
+  const rng: Rng = mulberry32(usedSeed)
+
+  let currentGrid = generateGrid(undefined, rng)
   let currentMeterValue = 0
   let peakMeter = 0
   let totalWin = 0
@@ -195,7 +206,7 @@ export function resolveSpin(): SpinResult {
         }
       }
 
-      const { newGrid } = cascadeGrid(currentGrid, allMatchedSet, BASE_ROWS)
+      const { newGrid } = cascadeGrid(currentGrid, allMatchedSet, BASE_ROWS, false, new Set(), rng)
       currentGrid = newGrid
     }
 
@@ -206,7 +217,7 @@ export function resolveSpin(): SpinResult {
 
     if (wildsToSpawn > 0) {
       wildSpawnsTotal += wildsToSpawn
-      const { newGrid } = spawnWilds(currentGrid, wildsToSpawn, BASE_ROWS)
+      const { newGrid } = spawnWilds(currentGrid, wildsToSpawn, BASE_ROWS, rng)
       currentGrid = newGrid
       continue outer
     }
@@ -223,13 +234,23 @@ export function resolveSpin(): SpinResult {
     totalWin, bonusTriggered, chainCount: chain, finalMeter: currentMeterValue,
     meterPeakBP, symbolWins, multiplierData, megaWildTriggered, megaWildPayout,
     transmutationTriggered, transmutationPayout, clusterSizes, wildSpawnsTotal, baseWin,
+    seed: usedSeed,
   }
 }
 
 // ── Bonus round ──────────────────────────────────────────────────────────────
 
-export function resolveBonusRound(): BonusResult {
-  let freeSpins = 8
+// Safety cap: if a bonus round ever exceeds this many total free-spin iterations
+// it is almost certainly stuck in a runaway feedback loop. Abort and record the seed.
+const BONUS_MAX_FREE_SPINS = 500
+
+export function resolveBonusRound(seed?: number): BonusResult {
+  const usedSeed = seed ?? randomSeed()
+  const rng: Rng = mulberry32(usedSeed)
+
+  let freeSpins = GAME_CONFIG.bonusRound.freeSpins
+  let totalSpinsUsed = 0
+  let aborted = false
   let totalWin = 0
   const perSpinWins: number[] = []
   let meterFillEvents = 0
@@ -240,33 +261,39 @@ export function resolveBonusRound(): BonusResult {
   let transmutationCount = 0
   let transmutationPayout = 0
 
-  // Sticky multipliers: positions that had multipliers in winning clusters this bonus round
-  const stickyMultipliers = new Map<string, string>()
-
-  // Meter persists across all free spins; fills award +2 spins then reset
-  let currentMeterValue = 0
-  let previousMeterValue = 0
+  // Sticky multipliers: position → { symbol, charges remaining }
+  // Each sticky fires only when it's in the priority cluster; breaks when charges hit 0.
+  const stickyMultipliers = new Map<string, { symbol: string; charges: number }>()
 
   while (freeSpins > 0) {
+    if (totalSpinsUsed >= BONUS_MAX_FREE_SPINS) {
+      aborted = true
+      break
+    }
+    totalSpinsUsed++
     freeSpins--
 
     const activeRows = BASE_ROWS
 
-    let currentGrid = generateBonusGrid(activeRows)
+    let currentGrid = generateBonusGrid(activeRows, rng)
 
     // Overlay sticky multipliers from previous spins
-    for (const [pos, sym] of stickyMultipliers) {
+    for (const [pos, entry] of stickyMultipliers) {
       const [c, r] = pos.split('-').map(Number)
-      if (r < activeRows) currentGrid[c][r] = sym
+      if (r < activeRows) currentGrid[c][r] = entry.symbol
     }
 
-    // Finale spin: last spin always gets 5 pre-seeded wilds
+    // Finale spin: last spin always gets pre-seeded wilds
     if (freeSpins === 0) {
-      const { newGrid: finaleGrid } = spawnWilds(currentGrid, 5, activeRows)
+      const { newGrid: finaleGrid } = spawnWilds(currentGrid, GAME_CONFIG.bonusRound.finalePreseededWilds, activeRows, rng)
       currentGrid = finaleGrid
     }
 
+    // Meter resets each spin; one fill per spin caps the feedback loop
+    let currentMeterValue = 0
+    let previousMeterValue = 0
     let spinWin = 0
+    let addedSpins = false
 
     while (true) {
       const clusters = findClusters(currentGrid, MIN_CLUSTER_SIZE, activeRows)
@@ -278,7 +305,6 @@ export function resolveBonusRound(): BonusResult {
       }
 
       previousMeterValue = currentMeterValue
-      // Use unique cell count so shared wildcards aren't double-counted
       currentMeterValue = currentMeterValue + allMatchedSet.size
 
       const megaWildBonus = getMegaWildBonusCells(currentGrid, clusters, activeRows)
@@ -327,38 +353,66 @@ export function resolveBonusRound(): BonusResult {
         transCells.forEach(p => allMatchedSet.add(p))
       }
 
-      for (const cluster of expandedClusters) {
-        const d = getClusterWinDetail(currentGrid, cluster)
-        spinWin += d.win
+      // ── Exclusive multiplier claiming ────────────────────────────────────────
+      // Only the cluster with the highest-value main symbol gets multiplier benefit.
+      // Others score at base payout. Prevents all clusters compounding simultaneously.
+      const clusterDetails = expandedClusters.map(c => getClusterWinDetail(currentGrid, c))
+      const priorityIdx = clusterDetails.reduce((best, d, i) => {
+        const bestPayout = SYMBOL_PAYOUTS[clusterDetails[best].mainSymbol ?? ''] ?? 0
+        const thisPayout = SYMBOL_PAYOUTS[d.mainSymbol ?? ''] ?? 0
+        return thisPayout > bestPayout ? i : best
+      }, 0)
+
+      for (let i = 0; i < clusterDetails.length; i++) {
+        const d = clusterDetails[i]
+        const effectiveWin = i === priorityIdx ? d.win : d.baseWin
+        spinWin += effectiveWin
 
         if (d.mainSymbol) {
-          addSymbolWin(symbolWins, d.mainSymbol, d.win, d.size)
-          if (d.multiplierValues.length > 0) {
-            addMultiplierData(multiplierData, d.multiplierValues, d.win, d.baseWin)
+          addSymbolWin(symbolWins, d.mainSymbol, effectiveWin, d.size)
+          if (i === priorityIdx && d.multiplierValues.length > 0) {
+            addMultiplierData(multiplierData, d.multiplierValues, effectiveWin, d.baseWin)
           }
-          if (d.hasMegaWild) {
-            megaWildCount++
-            megaWildPayout += d.win
-          }
-          if (d.hasTransmutation) {
-            transmutationCount++
-            transmutationPayout += d.win
-          }
+          if (d.hasMegaWild) { megaWildCount++; megaWildPayout += effectiveWin }
+          if (d.hasTransmutation) { transmutationCount++; transmutationPayout += effectiveWin }
         }
+      }
 
-        // Record multiplier cells in winning clusters as sticky multipliers (capped)
+      // ── Sticky multiplier management ─────────────────────────────────────────
+      // Snapshot existing stickies BEFORE adding new ones so that a multiplier's
+      // first hit fills its orbs (no charge consumed) and only subsequent hits deplete.
+      const preExistingSticky = new Set(stickyMultipliers.keys())
+
+      for (const cluster of expandedClusters) {
         for (const k of cluster) {
           const [c, r] = k.split('-').map(Number)
           const sym = currentGrid[c][r]
-          if (isMultiplier(sym)) {
-            if (stickyMultipliers.has(k) || stickyMultipliers.size < STICKY_MULTIPLIER_CAP) {
-              stickyMultipliers.set(k, sym)
-            }
+          if (isMultiplier(sym) && !stickyMultipliers.has(k) && stickyMultipliers.size < STICKY_MULTIPLIER_CAP) {
+            stickyMultipliers.set(k, { symbol: sym, charges: STICKY_MULTIPLIER_CHARGES })
           }
         }
       }
 
-      // BP detection uses raw (pre-reset) meter value to catch all crossings
+      // Decrement charges only for stickies that were already locked before this step
+      const depleted = new Set<string>()
+      for (const k of expandedClusters[priorityIdx]) {
+        if (!preExistingSticky.has(k)) continue  // first hit — orbs just filled, no charge consumed
+        const entry = stickyMultipliers.get(k)
+        if (entry) {
+          entry.charges--
+          if (entry.charges <= 0) {
+            stickyMultipliers.delete(k)
+            depleted.add(k)
+          }
+        }
+      }
+
+      // Protect live stickies from cascade; let depleted ones fall away naturally
+      const stickyKeys = new Set(stickyMultipliers.keys())
+      for (const k of stickyKeys) allMatchedSet.delete(k)
+      // Depleted keys stay in allMatchedSet so they cascade away
+
+      // BP detection for wild spawns
       const newBPIndices = getNewBreakpointIndices(
         currentMeterValue, previousMeterValue, BONUS_FRUIT_METER_BREAKPOINTS
       )
@@ -366,22 +420,18 @@ export function resolveBonusRound(): BonusResult {
         .filter(idx => idx < BONUS_FRUIT_METER_BREAKPOINTS.length - 1)
         .reduce((sum, idx) => sum + BONUS_WILDS_PER_BREAKPOINT[idx], 0)
 
-      // Fill detection: award +2 spins and reset meter (can trigger multiple times)
-      while (currentMeterValue >= BONUS_FRUIT_METER_MAX) {
+      // Fill detection: one award per spin caps the feedback loop
+      if (!addedSpins && currentMeterValue >= BONUS_FRUIT_METER_MAX) {
+        addedSpins = true
         meterFillEvents++
-        freeSpins += 2
-        currentMeterValue -= BONUS_FRUIT_METER_MAX
+        freeSpins += GAME_CONFIG.fruitMeter.bonus.extraSpinsOnFill
       }
 
-      // Sticky multipliers stay fixed during cascade
-      const stickyKeys = new Set(stickyMultipliers.keys())
-      for (const k of stickyKeys) allMatchedSet.delete(k)
-
-      const { newGrid } = cascadeGrid(currentGrid, allMatchedSet, activeRows, true, stickyKeys)
+      const { newGrid } = cascadeGrid(currentGrid, allMatchedSet, activeRows, true, stickyKeys, rng)
       currentGrid = newGrid
 
       if (wildsToSpawn > 0) {
-        const { newGrid: gw } = spawnWilds(currentGrid, wildsToSpawn, activeRows)
+        const { newGrid: gw } = spawnWilds(currentGrid, wildsToSpawn, activeRows, rng)
         currentGrid = gw
       }
     }
@@ -395,5 +445,6 @@ export function resolveBonusRound(): BonusResult {
     perSpinWins, meterFillEvents,
     symbolWins, multiplierData, megaWildCount, megaWildPayout,
     transmutationCount, transmutationPayout,
+    seed: usedSeed, aborted,
   }
 }

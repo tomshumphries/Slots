@@ -110,6 +110,12 @@ export interface NormalAggregates {
   avgZeroWinRunLength: number   // average length of consecutive zero-win streaks
 }
 
+export interface BonusWinBucket {
+  label: string
+  count: number
+  pct: number
+}
+
 export interface BonusAggregates {
   totalRounds: number
   winDist: WinBuckets
@@ -127,6 +133,18 @@ export interface BonusAggregates {
   meterFillRate: number         // % of rounds where meter filled at least once
   totalExtraSpinEvents: number  // total +2 spin awards across all rounds
   roundsWithExtraSpins: number
+  // Win distribution stats
+  bonusWinMin: number
+  bonusWinMax: number
+  bonusWinP25: number
+  bonusWinMedian: number
+  bonusWinP75: number
+  bonusWinP90: number
+  bonusWinP95: number
+  bonusWinStdDev: number
+  bonusWinHistogram: BonusWinBucket[]   // dynamic P99-width bins
+  bonusWinTopN: number[]                // top 10 individual round wins, descending
+  bonusWinTopNWithSeeds: { win: number; seed: number }[]  // top 10 with their bonus master seeds
 }
 
 // ── Final result ──────────────────────────────────────────────────────────────
@@ -153,6 +171,7 @@ export interface SimResult {
     durationMs: number
     seed: null
     config: ConfigSnapshot
+    stalledBonusSeeds: number[]  // seeds that hit the runaway-spin safety cap
   }
   summary: {
     pBonus: number

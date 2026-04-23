@@ -24,4 +24,4 @@ export interface SpawnResult {
 }
 
 // Re-export MultiplierValue from config
-export type { MultiplierValue } from '../config/multipliers'
+export type { MultiplierValue } from '../config'

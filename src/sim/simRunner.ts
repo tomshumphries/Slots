@@ -9,6 +9,7 @@
 // inline with running totals; no unbounded arrays are grown.
 
 import { resolveSpin, resolveBonusRound } from '../logic/spinResolver'
+import { randomSeed } from '../logic/rng'
 import {
   BET_AMOUNT, MIN_CLUSTER_SIZE,
   FRUIT_METER_MAX, FRUIT_METER_BREAKPOINTS, WILDS_PER_BREAKPOINT,
@@ -19,6 +20,7 @@ import type {
   SimConfig, SimProgress, SimResult, SpinRecord, BonusRecord,
   WinBuckets, AggSymbolStats, AggMultiplierStats,
   NormalAggregates, BonusAggregates, MeterFillDist, ConfigSnapshot,
+  BonusWinBucket,
 } from './types'
 import type { SymbolWinEntry, MultiplierEntry } from '../logic/spinResolver'
 
@@ -239,6 +241,10 @@ export async function runSimulation(
 
   const bonusSeries: BonusRecord[] = []
   let bonusWinSum = 0
+  const stalledBonusSeeds: number[] = []
+  // Top 10 bonus rounds by win — maintained as a min-heap (smallest-first so we can evict cheaply)
+  const TOP_N = 10
+  const topBonusRounds: { win: number; seed: number }[] = []
 
   const bSymbolAgg: Record<string, SymbolWinEntry> = {}
   const bMultiplierAgg: Record<string, MultiplierEntry> = {}
@@ -252,6 +258,9 @@ export async function runSimulation(
   let bMeterFillEvents = 0
   let bRoundsWithExtraSpins = 0
   const bWinDist: WinBuckets = { zero: 0, micro: 0, small: 0, medium: 0, large: 0, big: 0, huge: 0 }
+  const bWinArray: number[] = []
+  // Welford variance for bonus wins
+  let bWMean = 0, bWM2 = 0
 
   const bonusCount = isTimeBased ? Infinity : config.bonusSpins
   const bonusChartEvery = isTimeBased ? Math.max(1, Math.floor(BATCH_SIZE / 10)) : chartInterval(config.bonusSpins)
@@ -266,9 +275,22 @@ export async function runSimulation(
       if (isTimeBased && Date.now() - bonusStart >= halfTimeMs) break
     }
 
-    const bonus = resolveBonusRound()
+    const bonusSeed = randomSeed()
+    const bonus = resolveBonusRound(bonusSeed)
+    if (bonus.aborted) stalledBonusSeeds.push(bonusSeed)
     const n = bi + 1
     bonusWinSum += bonus.totalWin
+    bWinArray.push(bonus.totalWin)
+
+    // Maintain top-N list: insert if list isn't full or this win beats the current minimum
+    if (topBonusRounds.length < TOP_N || bonus.totalWin > topBonusRounds[0].win) {
+      topBonusRounds.push({ win: bonus.totalWin, seed: bonusSeed })
+      topBonusRounds.sort((a, b) => a.win - b.win)   // keep ascending so [0] is the min
+      if (topBonusRounds.length > TOP_N) topBonusRounds.shift()
+    }
+    const bDelta = bonus.totalWin - bWMean
+    bWMean += bDelta / n
+    bWM2 += bDelta * (bonus.totalWin - bWMean)
 
     mergeSymbolWins(bSymbolAgg, bonus.symbolWins)
     mergeMultiplierData(bMultiplierAgg, bonus.multiplierData)
@@ -339,6 +361,44 @@ export async function runSimulation(
     avgZeroWinRunLength: nZeroStreakCount > 0 ? nZeroStreakTotal / nZeroStreakCount : 0,
   }
 
+  // ── Bonus win distribution ────────────────────────────────────────────────
+
+  function pctile(sorted: number[], p: number): number {
+    if (sorted.length === 0) return 0
+    const idx = Math.min(Math.floor((p / 100) * sorted.length), sorted.length - 1)
+    return sorted[idx]
+  }
+
+  bWinArray.sort((a, b) => a - b)
+  const bonusWinMin    = bWinArray[0] ?? 0
+  const bonusWinMax    = bWinArray[bWinArray.length - 1] ?? 0
+  const bonusWinP25    = pctile(bWinArray, 25)
+  const bonusWinMedian = pctile(bWinArray, 50)
+  const bonusWinP75    = pctile(bWinArray, 75)
+  const bonusWinP90    = pctile(bWinArray, 90)
+  const bonusWinP95    = pctile(bWinArray, 95)
+  const bonusWinStdDev = actualBonusSpins > 1 ? Math.sqrt(bWM2 / (actualBonusSpins - 1)) : 0
+
+  // Dynamic histogram: 15 equal-width bins up to P99, then a tail bucket for outliers
+  const p99val = Math.max(pctile(bWinArray, 99), 1)
+  const rawWidth = p99val / 15
+  const binWidth = Math.max(1, Math.round(rawWidth / 5) * 5)   // round to nearest £5
+  const numMainBins = Math.ceil(p99val / binWidth)
+  const tailStart = numMainBins * binWidth
+
+  const bBucketCounts = new Array<number>(numMainBins + 1).fill(0)
+  for (const w of bWinArray) {
+    const idx = w >= tailStart ? numMainBins : Math.min(Math.floor(w / binWidth), numMainBins - 1)
+    bBucketCounts[idx]++
+  }
+
+  const bonusWinHistogram: BonusWinBucket[] = bBucketCounts.map((count, i) => {
+    const lo = i * binWidth
+    const hi = lo + binWidth
+    const label = i < numMainBins ? `£${lo}-${hi}` : `£${tailStart}+`
+    return { label, count, pct: actualBonusSpins > 0 ? (count / actualBonusSpins) * 100 : 0 }
+  })
+
   const bonusAgg: BonusAggregates = {
     totalRounds: actualBonusSpins,
     winDist: bWinDist,
@@ -356,6 +416,11 @@ export async function runSimulation(
     meterFillRate: (bRoundsWithExtraSpins / Math.max(1, actualBonusSpins)) * 100,
     totalExtraSpinEvents: bMeterFillEvents,
     roundsWithExtraSpins: bRoundsWithExtraSpins,
+    bonusWinMin, bonusWinMax, bonusWinP25, bonusWinMedian,
+    bonusWinP75, bonusWinP90, bonusWinP95, bonusWinStdDev,
+    bonusWinHistogram,
+    bonusWinTopN: [...bWinArray].sort((a, b) => b - a).slice(0, 10),
+    bonusWinTopNWithSeeds: [...topBonusRounds].sort((a, b) => b.win - a.win),
   }
 
   const eTotalPerSpin = eNormalWinExclBonus + pBonus * eBonus
@@ -384,6 +449,7 @@ export async function runSimulation(
       normalSpins: actualNormalSpins, bonusSpins: actualBonusSpins,
       durationMs: totalDurationMs, seed: null,
       config: configSnapshot,
+      stalledBonusSeeds,
     },
     summary: {
       pBonus, eNormalWinExclBonus, eBonus, eTotalPerSpin, rtp,

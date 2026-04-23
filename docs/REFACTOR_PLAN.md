@@ -320,6 +320,10 @@ export function useAutoSpin(spinFn, balance, bonusMode) {
 3. ✅ Create `src/utils/helpers.ts`
 4. ✅ Update imports in SlotMachine.tsx
 5. ✅ **Tested - Build successful**
+6. ✅ Consolidated all gameplay constants into `src/config/gameConfig.ts` — single source of truth
+   - All logic, UI text, and sim code reads from `GAME_CONFIG`
+   - Named exports in `index.ts` are derived aliases (backwards compatible)
+   - See [`docs/GAME_CONFIG.md`](./GAME_CONFIG.md) for full reference
 
 ### Phase 2: Logic Functions (Medium Risk) ✅ COMPLETE
 1. ✅ Create `src/logic/` with all pure functions

@@ -14,27 +14,28 @@ import {
   TRANSMUTATION_CHANCE_NORMAL,
   TRANSMUTATION_CHANCE_BONUS,
 } from '../config'
+import type { Rng } from './rng'
 
 // Generate a weighted random symbol (normal play - includes multipliers except 20x)
-export function randomSymbol(inCascade: boolean = false): string {
+export function randomSymbol(inCascade: boolean = false, rng: Rng = Math.random): string {
   // Mega Wild chance first (very rare - 0.1% in normal play)
   // Only spawns on initial grid generation, not during cascades
-  if (!inCascade && Math.random() < MEGA_WILD_CHANCE_NORMAL) {
+  if (!inCascade && rng() < MEGA_WILD_CHANCE_NORMAL) {
     return MEGA_WILD_SYMBOL
   }
 
   // Transmutation Wild chance (0.08% in normal play - slightly rarer than Mega Wild)
-  if (!inCascade && Math.random() < TRANSMUTATION_CHANCE_NORMAL) {
+  if (!inCascade && rng() < TRANSMUTATION_CHANCE_NORMAL) {
     return TRANSMUTATION_SYMBOL
   }
 
   // Multiplier chance in normal play (~0.5% total)
   // Excludes 20x which is reserved for bonus mode
-  if (!inCascade && Math.random() < NORMAL_MULTIPLIER_CHANCE) {
+  if (!inCascade && rng() < NORMAL_MULTIPLIER_CHANCE) {
     // Select multiplier based on relative weights (excluding 20x)
     const normalWeights = NORMAL_MULTIPLIER_VALUES.map(v => MULTIPLIER_WEIGHTS[v])
     const totalMultWeight = normalWeights.reduce((a, b) => a + b, 0)
-    let multRandom = Math.random() * totalMultWeight
+    let multRandom = rng() * totalMultWeight
 
     for (let i = 0; i < NORMAL_MULTIPLIER_VALUES.length; i++) {
       multRandom -= normalWeights[i]
@@ -47,7 +48,7 @@ export function randomSymbol(inCascade: boolean = false): string {
 
   // Weighted random selection for regular symbols
   const totalWeight = Object.values(SYMBOL_WEIGHTS).reduce((a, b) => a + b, 0)
-  let random = Math.random() * totalWeight
+  let random = rng() * totalWeight
 
   for (const symbol of SYMBOLS) {
     random -= SYMBOL_WEIGHTS[symbol]
@@ -60,21 +61,21 @@ export function randomSymbol(inCascade: boolean = false): string {
 }
 
 // Generate symbol for bonus mode (includes multipliers at higher frequency, including 20x)
-export function randomBonusSymbol(): string {
+export function randomBonusSymbol(rng: Rng = Math.random): string {
   // Mega Wild chance - same as normal play (0.1%)
-  if (Math.random() < MEGA_WILD_CHANCE_NORMAL) {
+  if (rng() < MEGA_WILD_CHANCE_NORMAL) {
     return MEGA_WILD_SYMBOL
   }
 
   // Transmutation Wild chance (0.4% in bonus mode)
-  if (Math.random() < TRANSMUTATION_CHANCE_BONUS) {
+  if (rng() < TRANSMUTATION_CHANCE_BONUS) {
     return TRANSMUTATION_SYMBOL
   }
 
   // Multiplier chance in bonus play (~1.5% per cell — 3× normal rate, includes 20x)
-  if (Math.random() < BONUS_MULTIPLIER_CHANCE) {
+  if (rng() < BONUS_MULTIPLIER_CHANCE) {
     const totalMultWeight = MULTIPLIER_VALUES.reduce((sum, v) => sum + MULTIPLIER_WEIGHTS[v], 0)
-    let multRandom = Math.random() * totalMultWeight
+    let multRandom = rng() * totalMultWeight
     for (const value of MULTIPLIER_VALUES) {
       multRandom -= MULTIPLIER_WEIGHTS[value]
       if (multRandom <= 0) return `${value}x`
@@ -84,7 +85,7 @@ export function randomBonusSymbol(): string {
 
   // Regular symbol
   const totalWeight = Object.values(SYMBOL_WEIGHTS).reduce((a, b) => a + b, 0)
-  let random = Math.random() * totalWeight
+  let random = rng() * totalWeight
 
   for (const symbol of SYMBOLS) {
     random -= SYMBOL_WEIGHTS[symbol]

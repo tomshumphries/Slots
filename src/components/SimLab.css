@@ -326,6 +326,45 @@
   margin-top: 8px;
 }
 
+/* ── Stalled bonus seeds warning ── */
+.stalled-seeds-panel {
+  background: #2a1a00;
+  border: 1px solid #f59e0b;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-top: 12px;
+}
+.stalled-seeds-title {
+  font-weight: 700;
+  color: #f59e0b;
+  font-size: 0.95rem;
+  margin-bottom: 6px;
+}
+.stalled-seeds-desc {
+  font-size: 0.8rem;
+  color: #d1a04a;
+  margin: 0 0 10px;
+}
+.stalled-seeds-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.stalled-seed-chip {
+  background: #1a1000;
+  border: 1px solid #f59e0b;
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 0.78rem;
+  color: #fbbf24;
+  cursor: pointer;
+  user-select: all;
+  transition: background 0.15s;
+}
+.stalled-seed-chip:hover {
+  background: #3a2a00;
+}
+
 /* ── Saved runs panel ── */
 .saved-runs-panel {
   background: #1a1a2e;

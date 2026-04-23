@@ -10,7 +10,9 @@
       "Bash(npm run build:*)",
       "Bash(wc:*)",
       "Bash(npx tsx *)",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(wmic process *)",
+      "Bash(grep -v \"^$\")"
     ]
   }
 }

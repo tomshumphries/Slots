@@ -3,12 +3,14 @@ import './SlotMachine.css'
 
 // Config imports
 import {
+  GAME_CONFIG,
   SYMBOL_PAYOUTS,
   SYMBOL_WEIGHTS,
   MULTIPLIER_WEIGHTS,
   NORMAL_MULTIPLIER_CHANCE,
   BONUS_MULTIPLIER_CHANCE,
   STICKY_MULTIPLIER_CAP,
+  STICKY_MULTIPLIER_CHARGES,
   FRUIT_METER_MAX,
   FRUIT_METER_BREAKPOINTS,
   WILDS_PER_BREAKPOINT,
@@ -42,8 +44,12 @@ import {
   spawnWilds,
   cascadeGrid,
   calculateClusterWin,
+  getClusterWinDetail,
   getNewBreakpointIndices,
+  mulberry32,
+  randomSeed,
 } from '../logic'
+import type { Rng } from '../logic'
 
 function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
   const [grid, setGrid] = useState<string[][]>(() => generateGrid())
@@ -64,8 +70,11 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
   const freeSpinsRef = useRef(0)
   const [bonusTotalWin, setBonusTotalWin] = useState(0)
   const bonusTotalWinRef = useRef(0)
-  const stickyMultipliersRef = useRef<Map<string, string>>(new Map())
+  const stickyMultipliersRef = useRef<Map<string, { symbol: string; charges: number }>>(new Map())
+  const [stickyCharges, setStickyCharges] = useState<Map<string, number>>(new Map())
   const bonusMeterRef = useRef(0)
+  const bonusMasterSeedRef = useRef(0)   // seed for the full bonus round
+  const bonusRngRef = useRef<Rng | null>(null) // single shared RNG for the whole round
 
   // Fruit meter state (Tome of Madness style bonus trigger)
   const [fruitMeter, setFruitMeter] = useState(0)
@@ -79,7 +88,7 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
 
   // Big win celebration state (for normal play)
   const [showBigWin, setShowBigWin] = useState(false)
-  const BIG_WIN_THRESHOLD = 20 // £20+ triggers big win celebration
+  const BIG_WIN_THRESHOLD = GAME_CONFIG.economy.bigWinThreshold
 
   // Panel visibility — start collapsed on small screens
   const [showInfoCard, setShowInfoCard] = useState(() => window.innerWidth > 1100)
@@ -89,6 +98,10 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
   const [autoSpin, setAutoSpin] = useState(false)
   const [autoDeposit, setAutoDeposit] = useState(true)
   const autoSpinRef = useRef(false)
+
+  // Seed debugger: optional fixed seed for reproducible spins
+  const [seedInput, setSeedInput] = useState('')
+  const [lastSpinSeed, setLastSpinSeed] = useState<number | null>(null)
   const balanceRef = useRef(balance)
   const [musicPlaying, setMusicPlaying] = useState(false)
   const [sfxVolume, setSfxVolume] = useState(50)
@@ -122,7 +135,7 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
   useEffect(() => {
     if (autoDeposit && balance <= 0 && !spinning && !bonusMode && !showBonusModal && !showBonusEnd) {
       const timer = setTimeout(() => {
-        onBalanceChange(5)
+        onBalanceChange(GAME_CONFIG.economy.depositAmount)
       }, 5000)
       return () => clearTimeout(timer)
     }
@@ -132,19 +145,28 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
   const startBonusMode = useCallback(() => {
     setShowBonusModal(false)
     setBonusMode(true)
-    setFreeSpins(8)
-    freeSpinsRef.current = 8 // Update ref immediately
+    setFreeSpins(GAME_CONFIG.bonusRound.freeSpins)
+    freeSpinsRef.current = GAME_CONFIG.bonusRound.freeSpins
     setBonusTotalWin(0)
     bonusTotalWinRef.current = 0 // Reset ref too
     stickyMultipliersRef.current = new Map()
+    setStickyCharges(new Map())
     bonusMeterRef.current = 0
+    // Lock bonus master seed from seedInput if set, otherwise pick a fresh random one.
+    // Create one shared RNG for all free spins — this matches how resolveBonusRound works in the sim,
+    // so entering a sim seed in the UI will reproduce the exact same bonus round.
+    const masterSeed = seedInput.trim() !== ''
+      ? (parseInt(seedInput.trim(), 10) >>> 0)
+      : randomSeed()
+    bonusMasterSeedRef.current = masterSeed
+    bonusRngRef.current = mulberry32(masterSeed)
     setFruitMeter(0)
     // Generate a fresh grid for bonus mode with BASE_ROWS
     setGrid(generateGrid(BASE_ROWS))
-    setMessage('BONUS MODE! 8 Free Spins!')
+    setMessage(`BONUS MODE! ${GAME_CONFIG.bonusRound.freeSpins} Free Spins!`)
     // Switch to intense bonus music
     soundManager.setBonusMode(true)
-  }, [])
+  }, [seedInput])
 
   // Bonus spin function — fruit meter accumulates across all free spins; filling to max awards +2 spins then resets
   const bonusSpin = useCallback(async () => {
@@ -167,24 +189,30 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
     setChainCount(0)
     setSettledCols(0)
 
-    // Meter carries over from previous spins — read from ref so it persists across bonusSpin calls
-    let currentMeterValue = bonusMeterRef.current
+    // Meter resets each spin; one fill per spin caps the feedback loop with sticky multipliers
+    let currentMeterValue = 0
+    setFruitMeter(0)
 
     const activeRows = BASE_ROWS
 
+    // Use the shared RNG for this bonus round — same single stream as resolveBonusRound in the sim,
+    // so entering a sim bonus seed reproduces the exact same round spin-by-spin.
+    const rng: Rng = bonusRngRef.current!
+    setLastSpinSeed(bonusMasterSeedRef.current)
+
     // Generate final grid with current active rows (bonus mode includes 2x multipliers)
-    let currentGrid = generateBonusGrid(activeRows)
+    let currentGrid = generateBonusGrid(activeRows, rng)
 
     // Overlay sticky multipliers accumulated from previous spins in this bonus round
-    for (const [pos, sym] of stickyMultipliersRef.current) {
+    for (const [pos, entry] of stickyMultipliersRef.current) {
       const [c, r] = pos.split('-').map(Number)
-      if (r < activeRows) currentGrid[c][r] = sym
+      if (r < activeRows) currentGrid[c][r] = entry.symbol
     }
 
     // Sticky cells stay locked in place during spin; only non-sticky cells cycle randomly
     const spinCol = (colIdx: number): string[] =>
       Array(activeRows).fill(null).map((_, rowIdx) =>
-        stickyMultipliersRef.current.get(`${colIdx}-${rowIdx}`) ?? randomBonusSymbol()
+        stickyMultipliersRef.current.get(`${colIdx}-${rowIdx}`)?.symbol ?? randomBonusSymbol()
       )
 
     // Start with all columns spinning
@@ -234,12 +262,12 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
     setSpinning(false)
     soundManager.stopSpin()
 
-    // Finale spin: when this was the last spin (newSpinCount === 0), pre-seed 5 wilds
+    // Finale spin: when this was the last spin (newSpinCount === 0), pre-seed wilds
     if (newSpinCount === 0) {
       setMessage('⚡ FINALE SPIN! Bonus wilds incoming!')
       soundManager.playBonusLand()
       await new Promise(resolve => setTimeout(resolve, 600))
-      const { newGrid: finaleGrid, spawnedPositions } = spawnWilds(currentGrid, 5, activeRows)
+      const { newGrid: finaleGrid, spawnedPositions } = spawnWilds(currentGrid, GAME_CONFIG.bonusRound.finalePreseededWilds, activeRows, rng)
       currentGrid = finaleGrid
       setGrid(currentGrid)
       setMultiplierSpawnPositions(spawnedPositions)
@@ -250,8 +278,9 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
     // Now process cascades with fruit meter (bonus mode - filling meter adds +5 spins)
     let totalWin = 0
     let chain = 0
-    let previousMeterValue = currentMeterValue
-    // Cascade loop — meter accumulates per round, filling to max resets and awards +2 spins
+    let addedSpins = false
+    let previousMeterValue = 0
+    // Cascade loop — meter fills within this spin's cascades; one fill awards +2 spins
     while (true) {
       const clusters = findClusters(currentGrid, MIN_CLUSTER_SIZE, activeRows)
 
@@ -339,25 +368,62 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
         setGrid(currentGrid.map(col => [...col]))
       }
 
-      // Record sticky multipliers from winning clusters (persists across spins in this bonus round)
+      // ── Exclusive multiplier claiming ──────────────────────────────────────
+      // Highest-value symbol cluster claims all multipliers; others score at base.
+      const clusterDetails = expandedClusters.map(cl => getClusterWinDetail(currentGrid, cl))
+      const priorityIdx = clusterDetails.reduce((best, d, i) => {
+        const bestPayout = SYMBOL_PAYOUTS[clusterDetails[best].mainSymbol ?? ''] ?? 0
+        const thisPayout = SYMBOL_PAYOUTS[d.mainSymbol ?? ''] ?? 0
+        return thisPayout > bestPayout ? i : best
+      }, 0)
+
+      let clusterWin = 0
+      const clusterMultipliers: number[] = []
+      let hasWild = false
+      let hasMegaWild = false
+      for (let i = 0; i < clusterDetails.length; i++) {
+        const d = clusterDetails[i]
+        const effectiveWin = i === priorityIdx ? d.win : d.baseWin
+        clusterWin += effectiveWin
+        if (i === priorityIdx) clusterMultipliers.push(...d.multiplierValues)
+        if (d.hasWild) hasWild = true
+        if (d.hasMegaWild) hasMegaWild = true
+      }
+      totalWin += clusterWin
+
+      // ── Sticky multiplier management ───────────────────────────────────────
+      // Snapshot existing stickies BEFORE adding new ones — a multiplier's first hit
+      // fills its orbs (no charge consumed); only subsequent hits deplete them.
+      const preExistingSticky = new Set(stickyMultipliersRef.current.keys())
+
       for (const cluster of expandedClusters) {
         for (const k of cluster) {
           const [c, r] = k.split('-').map(Number)
           const sym = currentGrid[c][r]
-          if (isMultiplier(sym)) {
-              if (stickyMultipliersRef.current.has(k) || stickyMultipliersRef.current.size < STICKY_MULTIPLIER_CAP) {
-                stickyMultipliersRef.current.set(k, sym)
-              }
-            }
+          if (isMultiplier(sym) && !stickyMultipliersRef.current.has(k) && stickyMultipliersRef.current.size < STICKY_MULTIPLIER_CAP) {
+            stickyMultipliersRef.current.set(k, { symbol: sym, charges: STICKY_MULTIPLIER_CHARGES })
+          }
         }
       }
 
+      const depleted = new Set<string>()
+      for (const k of expandedClusters[priorityIdx]) {
+        if (!preExistingSticky.has(k)) continue  // first hit — orbs just filled, no charge consumed
+        const entry = stickyMultipliersRef.current.get(k)
+        if (entry) {
+          entry.charges--
+          if (entry.charges <= 0) {
+            stickyMultipliersRef.current.delete(k)
+            depleted.add(k)
+          }
+        }
+      }
+
+      // Push updated charges to React state so cells re-render with correct tier
+      setStickyCharges(new Map([...stickyMultipliersRef.current].map(([k, e]) => [k, e.charges])))
+
       // Show matches with symbol info (original clusters for display)
       setMatches(allMatchedMap)
-
-      // Calculate win using EXPANDED clusters (includes mega wild bonus for payout)
-      const { win: clusterWin, multipliers: clusterMultipliers, hasWild, hasMegaWild } = calculateClusterWin(currentGrid, expandedClusters)
-      totalWin += clusterWin
 
       // Play appropriate sound based on wildcards involved
       // Note: Mega wild sound plays during bonus clear effect, not initial match
@@ -383,22 +449,21 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
         setMessage(`Cascade ${chain}! +£${clusterWin.toFixed(2)} | Meter: ${meterPercent}%`)
       }
 
-      // BP detection uses raw (pre-reset) meter value to catch all crossings
-      const newBreakpointIndices = getNewBreakpointIndices(currentMeterValue, previousMeterValue, BONUS_FRUIT_METER_BREAKPOINTS)
-      const wildsToSpawn = newBreakpointIndices
-        .filter(idx => idx < BONUS_FRUIT_METER_BREAKPOINTS.length - 1) // last BP triggers +2 spins, not wilds
-        .reduce((sum, idx) => sum + BONUS_WILDS_PER_BREAKPOINT[idx], 0)
-
-      // Fill detection: reset meter and award +2 spins each time it fills (can happen multiple times)
-      while (currentMeterValue >= BONUS_FRUIT_METER_MAX) {
-        currentMeterValue -= BONUS_FRUIT_METER_MAX
-        freeSpinsRef.current += 2
+      // Check for +2 spins (meter filled) — one per spin to cap feedback with sticky multipliers
+      if (!addedSpins && currentMeterValue >= BONUS_FRUIT_METER_MAX) {
+        addedSpins = true
+        freeSpinsRef.current += GAME_CONFIG.fruitMeter.bonus.extraSpinsOnFill
         setFreeSpins(freeSpinsRef.current)
-        setFruitMeter(currentMeterValue) // show post-reset value
-        setMessage('+2 FREE SPINS!')
+        setMessage(`+${GAME_CONFIG.fruitMeter.bonus.extraSpinsOnFill} FREE SPINS!`)
         soundManager.playBonusLand()
         await new Promise(resolve => setTimeout(resolve, 800))
       }
+
+      // BP detection for wild spawns
+      const newBreakpointIndices = getNewBreakpointIndices(currentMeterValue, previousMeterValue, BONUS_FRUIT_METER_BREAKPOINTS)
+      const wildsToSpawn = newBreakpointIndices
+        .filter(idx => idx < BONUS_FRUIT_METER_BREAKPOINTS.length - 1) // last BP triggers +2 spins separately
+        .reduce((sum, idx) => sum + BONUS_WILDS_PER_BREAKPOINT[idx], 0)
 
       // Wait to show the match
       const hasMultiplier = clusterMultipliers.length > 0
@@ -425,12 +490,12 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
         setMegaWildBonusCells(new Set())
       }
 
-      // Sticky multipliers stay in place — exclude from removal, treat as fixed during cascade
+      // Protect live stickies (charges > 0) from cascade; depleted ones stay in allMatchedSet
       const stickyKeys = new Set(stickyMultipliersRef.current.keys())
       for (const k of stickyKeys) allMatchedSet.delete(k)
 
       // Cascade - remove matches and drop tiles (gravity applies per-segment around fixed cells)
-      const { newGrid, movedCells, newCells } = cascadeGrid(currentGrid, allMatchedSet, activeRows, true, stickyKeys)
+      const { newGrid, movedCells, newCells } = cascadeGrid(currentGrid, allMatchedSet, activeRows, true, stickyKeys, rng)
       currentGrid = newGrid
 
       const allFalling = new Set([...movedCells, ...newCells])
@@ -453,7 +518,8 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
         const { newGrid: gridWithWilds, spawnedPositions } = spawnWilds(
           currentGrid,
           wildsToSpawn,
-          activeRows
+          activeRows,
+          rng
         )
         currentGrid = gridWithWilds
         setGrid(currentGrid)
@@ -465,9 +531,6 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
 
       await new Promise(resolve => setTimeout(resolve, 150))
     }
-
-    // Persist meter value across spins — carry remainder into next bonusSpin call
-    bonusMeterRef.current = currentMeterValue
 
     spinningRef.current = false
 
@@ -593,8 +656,13 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
     setFruitMeter(0)
     let currentMeterValue = 0
 
+    // Create RNG for this spin — seeded if seedInput is set, otherwise random
+    const spinSeed = seedInput.trim() !== '' ? (parseInt(seedInput.trim(), 10) >>> 0) : randomSeed()
+    const rng: Rng = mulberry32(spinSeed)
+    setLastSpinSeed(spinSeed)
+
     // Generate final grid upfront (guaranteed no instant wins)
-    let currentGrid = generateGrid()
+    let currentGrid = generateGrid(undefined, rng)
 
     // Start with all columns spinning
     const spinningGrid: string[][] = Array(COLS).fill(null).map(() =>
@@ -808,7 +876,7 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
         }
 
         // Cascade - remove matches and drop tiles
-        const { newGrid, movedCells, newCells } = cascadeGrid(currentGrid, allMatchedSet, BASE_ROWS)
+        const { newGrid, movedCells, newCells } = cascadeGrid(currentGrid, allMatchedSet, BASE_ROWS, false, new Set(), rng)
         currentGrid = newGrid
 
         // Combine moved and new cells for falling animation
@@ -846,7 +914,8 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
         const { newGrid, spawnedPositions } = spawnWilds(
           currentGrid,
           wildsToSpawn,
-          BASE_ROWS
+          BASE_ROWS,
+          rng
         )
         currentGrid = newGrid
         setGrid(currentGrid)
@@ -875,7 +944,7 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
       const overfill = currentMeterValue - FRUIT_METER_MAX
       setFruitMeter(overfill)
 
-      setMessage('BONUS! Meter Full - 10 FREE SPINS!')
+      setMessage(`BONUS! Meter Full - ${GAME_CONFIG.bonusRound.freeSpins} FREE SPINS!`)
       setShowBonusModal(true)
       playBonusSound()
     }
@@ -1182,6 +1251,8 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
 
                 const isSpawnedWild = multiplierSpawnPositions.includes(cellKey)
                 const isMegaWildClearing = megaWildBonusCells.has(cellKey)
+                const stickyChargeCount = stickyCharges.get(cellKey)
+                const isStickyMult = isMultiplierSymbol && stickyChargeCount !== undefined
 
                 return (
                   <div
@@ -1190,6 +1261,7 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
                       ${isMatched ? `matched ${getMatchColorClass(matchedSymbol)}` : ''}
                       ${isFalling ? 'falling' : ''}
                       ${isMultiplierSymbol ? `multiplier-symbol mult-${multiplierVal}` : ''}
+                      ${isStickyMult ? 'sticky-mult' : ''}
                       ${isWildSymbol ? 'wild-symbol' : ''}
                       ${isMegaWildSymbol ? 'mega-wild-symbol' : ''}
                       ${isSpawnedWild ? 'wild-spawned' : ''}
@@ -1204,7 +1276,19 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
                     ) : isMegaWildSymbol ? (
                       <span className="mega-wild-icon">{symbol}</span>
                     ) : isMultiplierSymbol ? (
-                      <span className="multiplier-icon">{symbol}</span>
+                      bonusMode ? (
+                        <div className="multiplier-cell-inner">
+                          <span className="multiplier-icon">{symbol}</span>
+                          <div className="charge-orbs">
+                            {[0, 1, 2].map(i => {
+                              const charges = stickyCharges.get(cellKey) ?? 0
+                              return <span key={i} className={`orb ${i < charges ? 'orb-filled' : 'orb-empty'}`} />
+                            })}
+                          </div>
+                        </div>
+                      ) : (
+                        <span className="multiplier-icon">{symbol}</span>
+                      )
                     ) : isWildSymbol ? (
                       <span className="wild-icon">{symbol}</span>
                     ) : (
@@ -1356,6 +1440,36 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
         >
           Payout Info
         </button>
+
+        <div className="admin-divider" />
+
+        <div className="admin-seed-section">
+          <span className="admin-seed-label">Spin seed</span>
+          <input
+            className="admin-seed-input"
+            type="number"
+            min="0"
+            max="4294967295"
+            placeholder="random"
+            value={seedInput}
+            onChange={e => setSeedInput(e.target.value)}
+          />
+          {seedInput.trim() !== '' && (
+            <button className="admin-btn" onClick={() => setSeedInput('')}>Clear</button>
+          )}
+          {lastSpinSeed !== null && (
+            <div
+              className="admin-seed-last"
+              title="Click to copy"
+              onClick={() => {
+                navigator.clipboard.writeText(String(lastSpinSeed))
+                setSeedInput(String(lastSpinSeed))
+              }}
+            >
+              Last: {lastSpinSeed}
+            </div>
+          )}
+        </div>
         </>}
       </div>
 
@@ -1374,7 +1488,7 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
         <div className="bonus-modal-overlay">
           <div className="bonus-modal" onClick={e => e.stopPropagation()}>
             <h2>🎉 BONUS TRIGGERED! 🎉</h2>
-            <p className="bonus-intro">Fruit Meter Full = 10 FREE SPINS!</p>
+            <p className="bonus-intro">Fruit Meter Full = {GAME_CONFIG.bonusRound.freeSpins} FREE SPINS!</p>
             <div className="bonus-features">
               <p>✨ Hit meter milestones to unlock extra rows!</p>
               <p>🎰 2x multiplier frequency!</p>

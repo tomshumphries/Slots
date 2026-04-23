@@ -112,6 +112,44 @@ console.log(`  Bonus meter fill rate: ${b.meterFillRate.toFixed(1)}% of rounds`)
 console.log(`  Duration:     ${fmtMs(r.meta.durationMs)}  (${(s.normalSpinsPerSec / 1000).toFixed(0)}k n/s, ${(s.bonusSpinsPerSec / 1000).toFixed(0)}k b/s)`)
 console.log('━'.repeat(56))
 
+// ── Bonus win distribution ────────────────────────────────────────────────────
+
+const f2 = (v: number) => `£${v.toFixed(2)}`
+console.log(`\n  Bonus Win Distribution  (n=${b.totalRounds.toLocaleString()})`)
+console.log(`  ${'Min:'.padEnd(10)}${f2(b.bonusWinMin).padStart(9)}    ${'Median:'.padEnd(10)}${f2(b.bonusWinMedian).padStart(9)}`)
+console.log(`  ${'P25:'.padEnd(10)}${f2(b.bonusWinP25).padStart(9)}    ${'P75:'.padEnd(10)}${f2(b.bonusWinP75).padStart(9)}`)
+console.log(`  ${'P90:'.padEnd(10)}${f2(b.bonusWinP90).padStart(9)}    ${'P95:'.padEnd(10)}${f2(b.bonusWinP95).padStart(9)}`)
+console.log(`  ${'Max:'.padEnd(10)}${f2(b.bonusWinMax).padStart(9)}    ${'StdDev:'.padEnd(10)}${f2(b.bonusWinStdDev).padStart(9)}`)
+console.log()
+
+const maxBucketLabel = Math.max(...b.bonusWinHistogram.map(bk => bk.label.length), 6)
+const maxCount = Math.max(...b.bonusWinHistogram.map(bk => bk.count), 1)
+const BAR_WIDTH = 26
+for (const bk of b.bonusWinHistogram) {
+  const bars = Math.round((bk.count / maxCount) * BAR_WIDTH)
+  const isTail = bk.label.endsWith('+')
+  const bar = (isTail ? '░' : '█').repeat(bars)
+  const barStr = bar.padEnd(BAR_WIDTH)
+  const label = bk.label.padEnd(maxBucketLabel)
+  const countStr = bk.count.toLocaleString().padStart(6)
+  const pctStr = `${bk.pct.toFixed(1)}%`.padStart(6)
+  console.log(`  ${label} |${barStr}  ${countStr} (${pctStr})`)
+}
+console.log()
+
+if (b.bonusWinTopNWithSeeds && b.bonusWinTopNWithSeeds.length > 0) {
+  console.log(`  Top ${b.bonusWinTopNWithSeeds.length} bonus wins (seed to replay):`)
+  b.bonusWinTopNWithSeeds.forEach(({ win, seed }, i) => {
+    console.log(`    #${String(i + 1).padEnd(3)} ${f2(win).padEnd(12)}  seed: ${seed}`)
+  })
+} else if (b.bonusWinTopN && b.bonusWinTopN.length > 0) {
+  console.log(`  Top ${b.bonusWinTopN.length} bonus wins:`)
+  b.bonusWinTopN.forEach((v, i) => {
+    console.log(`    #${String(i + 1).padEnd(3)} ${f2(v)}`)
+  })
+}
+console.log('━'.repeat(56))
+
 // ── Save to sim-results/ ──────────────────────────────────────────────────────
 
 const outDir = resolve(process.cwd(), 'sim-results')
