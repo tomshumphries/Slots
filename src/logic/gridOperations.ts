@@ -57,56 +57,67 @@ export function spawnWilds(
   return { newGrid, spawnedPositions }
 }
 
-// Remove matched cells and drop tiles down, fill from top
-// Returns new grid and set of cells that moved/are new
+// Remove matched cells and drop tiles down, fill from top.
+// fixedCells are immovable (sticky multipliers in bonus) — gravity applies per-segment between them.
 export function cascadeGrid(
   grid: string[][],
   matchedCells: Set<string>,
   activeRows: number = BASE_ROWS,
-  isBonusMode: boolean = false
+  isBonusMode: boolean = false,
+  fixedCells: Set<string> = new Set()
 ): CascadeResult {
   const newGrid = grid.map(col => [...col])
   const movedCells = new Set<string>()
   const newCells = new Set<string>()
 
   for (let col = 0; col < COLS; col++) {
-    // Get cells to remove in this column
-    const toRemove: number[] = []
+    // Collect fixed rows for this column (sorted ascending)
+    const fixedRows: number[] = []
     for (let row = 0; row < activeRows; row++) {
-      if (matchedCells.has(`${col}-${row}`)) {
-        toRemove.push(row)
-      }
+      if (fixedCells.has(`${col}-${row}`)) fixedRows.push(row)
     }
 
-    if (toRemove.length > 0) {
-      // Track which symbols are remaining and their original positions
-      const remaining: { symbol: string, originalRow: number }[] = []
-      for (let row = 0; row < activeRows; row++) {
+    // Build segments: ranges of non-fixed rows, split at each fixed row
+    const segStarts: number[] = [0]
+    const segEnds: number[] = []
+    for (const fr of fixedRows) {
+      segEnds.push(fr - 1)
+      segStarts.push(fr + 1)
+    }
+    segEnds.push(activeRows - 1)
+
+    for (let s = 0; s < segStarts.length; s++) {
+      const start = segStarts[s]
+      const end = segEnds[s]
+      if (start > end) continue
+
+      const toRemove: number[] = []
+      for (let row = start; row <= end; row++) {
+        if (matchedCells.has(`${col}-${row}`)) toRemove.push(row)
+      }
+      if (toRemove.length === 0) continue
+
+      const remaining: { symbol: string; originalRow: number }[] = []
+      for (let row = start; row <= end; row++) {
         if (!toRemove.includes(row)) {
           remaining.push({ symbol: newGrid[col][row], originalRow: row })
         }
       }
 
-      // Generate new symbols (use bonus symbols in bonus mode)
       const newSymbols = Array(toRemove.length).fill(null).map(() =>
         isBonusMode ? randomBonusSymbol() : randomSymbol(false)
       )
 
-      // Build new column: new symbols at top, then remaining
-      const newColumn = [...newSymbols, ...remaining.map(r => r.symbol)]
-      newGrid[col] = newColumn
-
-      // Mark new cells (top positions)
-      for (let row = 0; row < toRemove.length; row++) {
-        newCells.add(`${col}-${row}`)
-      }
-
-      // Mark cells that moved (remaining cells that shifted down)
-      for (let i = 0; i < remaining.length; i++) {
-        const newRow = toRemove.length + i
-        const originalRow = remaining[i].originalRow
-        if (newRow !== originalRow) {
-          movedCells.add(`${col}-${newRow}`)
+      // New symbols at top of segment, remaining compact to bottom
+      const segContent = [...newSymbols, ...remaining.map(r => r.symbol)]
+      for (let i = 0; i < segContent.length; i++) {
+        const row = start + i
+        newGrid[col][row] = segContent[i]
+        if (i < toRemove.length) {
+          newCells.add(`${col}-${row}`)
+        } else {
+          const origRow = remaining[i - toRemove.length].originalRow
+          if (row !== origRow) movedCells.add(`${col}-${row}`)
         }
       }
     }

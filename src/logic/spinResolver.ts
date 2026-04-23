@@ -371,7 +371,11 @@ export function resolveBonusRound(): BonusResult {
         .filter(idx => idx < BONUS_FRUIT_METER_BREAKPOINTS.length - 1)
         .reduce((sum, idx) => sum + BONUS_WILDS_PER_BREAKPOINT[idx], 0)
 
-      const { newGrid } = cascadeGrid(currentGrid, allMatchedSet, activeRows, true)
+      // Sticky multipliers stay fixed during cascade
+      const stickyKeys = new Set(stickyMultipliers.keys())
+      for (const k of stickyKeys) allMatchedSet.delete(k)
+
+      const { newGrid } = cascadeGrid(currentGrid, allMatchedSet, activeRows, true, stickyKeys)
       currentGrid = newGrid
 
       if (wildsToSpawn > 0) {

@@ -1,7 +1,7 @@
 // Win calculation functions
 
 import { SYMBOL_PAYOUTS, BET_AMOUNT } from '../config'
-import { isMultiplier, isWild, isMegaWild, isTransmutation, getMultiplierValue } from '../utils/helpers'
+import { isMultiplier, isWild, isMegaWild, isTransmutation, isWildcard, getMultiplierValue } from '../utils/helpers'
 import type { ClusterResult } from '../types'
 
 export function getClusterSizeMultiplier(size: number): number {
@@ -52,16 +52,23 @@ export function getClusterWinDetail(grid: string[][], cluster: Set<string>): Clu
 
   if (!hasMultiplierInCluster) clusterMultiplier = 1
 
+  // Count only non-wildcard cells — wilds bridge gaps but don't count toward size
+  let regularCount = 0
+  for (const cellKey of cluster) {
+    const [c, r] = cellKey.split('-').map(Number)
+    if (!isWildcard(grid[c][r])) regularCount++
+  }
+
   let win = 0
   let baseWin = 0
   if (mainSymbol) {
     const basePayout = SYMBOL_PAYOUTS[mainSymbol] ?? 0.5
-    const sizeMult = getClusterSizeMultiplier(cluster.size)
+    const sizeMult = getClusterSizeMultiplier(regularCount)
     win = basePayout * sizeMult * clusterMultiplier * BET_AMOUNT
     baseWin = basePayout * sizeMult * 1 * BET_AMOUNT
   }
 
-  return { mainSymbol, win, baseWin, size: cluster.size, multiplierValues, multiplierTotal: clusterMultiplier, hasWild, hasMegaWild, hasTransmutation }
+  return { mainSymbol, win, baseWin, size: regularCount, multiplierValues, multiplierTotal: clusterMultiplier, hasWild, hasMegaWild, hasTransmutation }
 }
 
 // Aggregate win across all clusters. Used by the game UI.

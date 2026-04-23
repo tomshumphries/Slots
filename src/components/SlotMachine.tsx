@@ -423,8 +423,12 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
         setMegaWildBonusCells(new Set())
       }
 
-      // Cascade - remove matches and drop tiles
-      const { newGrid, movedCells, newCells } = cascadeGrid(currentGrid, allMatchedSet, activeRows, true)
+      // Sticky multipliers stay in place — exclude from removal, treat as fixed during cascade
+      const stickyKeys = new Set(stickyMultipliersRef.current.keys())
+      for (const k of stickyKeys) allMatchedSet.delete(k)
+
+      // Cascade - remove matches and drop tiles (gravity applies per-segment around fixed cells)
+      const { newGrid, movedCells, newCells } = cascadeGrid(currentGrid, allMatchedSet, activeRows, true, stickyKeys)
       currentGrid = newGrid
 
       const allFalling = new Set([...movedCells, ...newCells])
