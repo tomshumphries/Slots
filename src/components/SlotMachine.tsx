@@ -183,6 +183,12 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
   const [autoSpin, setAutoSpin] = useLocalStorage('slots_autoSpin', false)
   const [autoDeposit, setAutoDeposit] = useLocalStorage('slots_autoDeposit', true)
   const autoSpinRef = useRef(false)
+  const mountedRef = useRef(true)
+  const autoSpinTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const bonusModeRef = useRef(false)
+  const prevBonusModeRef = useRef(false)
+  const showBonusModalRef = useRef(false)
+  const latestSpinRef = useRef<() => void>(() => {})
 
   // Seed debugger: optional fixed seed for reproducible spins
   const [seedInput, setSeedInput] = useState('')
@@ -228,9 +234,13 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
     freeSpinsRef.current = freeSpins
   }, [freeSpins])
 
-  // Update autoSpinRef when autoSpin changes
+  // Update autoSpinRef when autoSpin changes; cancel pending timer when disabled
   useEffect(() => {
     autoSpinRef.current = autoSpin
+    if (!autoSpin && autoSpinTimerRef.current) {
+      clearTimeout(autoSpinTimerRef.current)
+      autoSpinTimerRef.current = null
+    }
   }, [autoSpin])
 
   // Update sound volumes
@@ -241,6 +251,16 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
   useEffect(() => {
     soundManager.setMusicVolume(musicVolume / 100)
   }, [musicVolume])
+
+  // Sync mutable refs to state so async callbacks and timeouts always see the latest values
+  useEffect(() => { bonusModeRef.current = bonusMode }, [bonusMode])
+  useEffect(() => { showBonusModalRef.current = showBonusModal }, [showBonusModal])
+
+  // Unmount cleanup — stop pending timers so they can't fire on a dead component
+  useEffect(() => () => {
+    mountedRef.current = false
+    if (autoSpinTimerRef.current) clearTimeout(autoSpinTimerRef.current)
+  }, [])
 
   // Auto-deposit when balance hits 0
   useEffect(() => {
@@ -670,8 +690,8 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
 
     if (spinsRemaining > 0 && autoSpinRef.current) {
       // Continue bonus autospin
-      setTimeout(() => {
-        if (autoSpinRef.current && !spinningRef.current && freeSpinsRef.current > 0) {
+      autoSpinTimerRef.current = setTimeout(() => {
+        if (mountedRef.current && autoSpinRef.current && !spinningRef.current && freeSpinsRef.current > 0) {
           bonusSpin()
         }
       }, 1500)
@@ -723,21 +743,8 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
       setFruitMeter(0)
       setMessage(`BONUS COMPLETE! Total: £${finalWin.toFixed(2)}`)
       setGrid(generateGrid(BASE_ROWS))
-      spinningRef.current = false // Ensure spinning is false
-
-      // If autospin is on, continue with normal play after a brief delay
-      if (autoSpinRef.current) {
-        setTimeout(() => {
-          // Trigger normal spin if conditions are met
-          if (autoSpinRef.current && !spinningRef.current && balanceRef.current >= BET_AMOUNT) {
-            // Find the NORMAL spin button (not bonus) - it doesn't have bonus-spin-btn class
-            const spinBtn = document.querySelector('.spin-btn:not(.bonus-spin-btn):not(:disabled)') as HTMLButtonElement
-            if (spinBtn) {
-              spinBtn.click()
-            }
-          }
-        }, 1500)
-      }
+      spinningRef.current = false
+      // Bonus→normal autospin transition is handled by the bonusMode useEffect
     }
   }, [bonusTotalWin, onBalanceChange, minWinForAudio])
 
@@ -1128,13 +1135,38 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
 
     // Autospin continuation (if not going to bonus and have balance)
     if (autoSpinRef.current && !bonusTriggered) {
-      setTimeout(() => {
-        if (autoSpinRef.current && !spinningRef.current && balanceRef.current >= BET_AMOUNT) {
+      autoSpinTimerRef.current = setTimeout(() => {
+        if (mountedRef.current && autoSpinRef.current && !spinningRef.current && balanceRef.current >= BET_AMOUNT) {
           spin()
         }
       }, 1500)
     }
   }, [balance, bonusMode, onBalanceChange, minWinForAudio])
+
+  // Always keep latestSpinRef pointing at the freshest spin closure
+  useEffect(() => { latestSpinRef.current = spin }, [spin])
+
+  // Auto-start bonus when modal appears while autoSpin is enabled
+  useEffect(() => {
+    if (!showBonusModal || !autoSpin) return
+    const t = setTimeout(() => {
+      if (mountedRef.current && showBonusModalRef.current) startBonusMode()
+    }, 1200)
+    return () => clearTimeout(t)
+  }, [showBonusModal, autoSpin, startBonusMode])
+
+  // Bonus→normal transition: once bonusMode flips false, schedule the next normal spin
+  useEffect(() => {
+    if (!bonusMode && prevBonusModeRef.current && autoSpinRef.current) {
+      const t = setTimeout(() => {
+        if (mountedRef.current && autoSpinRef.current && !spinningRef.current && balanceRef.current >= BET_AMOUNT) {
+          latestSpinRef.current()
+        }
+      }, 1500)
+      autoSpinTimerRef.current = t
+    }
+    prevBonusModeRef.current = bonusMode
+  }, [bonusMode]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Convert column-based grid to row-based for display
   const activeRows = BASE_ROWS
