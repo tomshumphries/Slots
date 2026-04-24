@@ -538,7 +538,15 @@
   background: rgba(0, 0, 0, 0.3);
   border-radius: 8px;
   overflow: hidden;
-  margin-bottom: 10px;
+  margin-bottom: 2px;
+}
+
+.session-chart-legend {
+  font-size: 0.62rem;
+  color: #333;
+  text-align: right;
+  padding: 2px 4px 8px;
+  font-variant-numeric: tabular-nums;
 }
 
 .sparkline-svg {

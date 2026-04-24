@@ -52,35 +52,85 @@ import {
 } from '../logic'
 import type { Rng } from '../logic'
 
-function Sparkline({ data }: { data: number[] }) {
-  if (data.length < 2) {
+// HistoryState keeps bounded memory via LTTB condensation
+type HistoryState = { archive: number[]; recent: number[] }
+
+// Largest Triangle Three Buckets — preserves visual shape when downsampling
+function lttb(data: number[], threshold: number): number[] {
+  const n = data.length
+  if (n <= threshold) return [...data]
+  if (threshold <= 2) return [data[0], data[n - 1]]
+  const sampled: number[] = [data[0]]
+  let prevIdx = 0
+  const bucketSize = (n - 2) / (threshold - 2)
+  for (let bucket = 0; bucket < threshold - 2; bucket++) {
+    const rangeStart = Math.floor(bucket * bucketSize) + 1
+    const rangeEnd = Math.min(Math.floor((bucket + 1) * bucketSize) + 1, n - 1)
+    const nextStart = rangeEnd
+    const nextEnd = Math.min(Math.floor((bucket + 2) * bucketSize) + 1, n - 1)
+    let sumY = 0, sumX = 0, count = 0
+    for (let j = nextStart; j < nextEnd; j++) { sumY += data[j]; sumX += j; count++ }
+    const cX = count > 0 ? sumX / count : n - 1
+    const cY = count > 0 ? sumY / count : data[n - 1]
+    const aX = prevIdx, aY = data[prevIdx]
+    let maxArea = -1, sel = rangeStart
+    for (let j = rangeStart; j < rangeEnd; j++) {
+      const area = Math.abs((aX - cX) * (data[j] - aY) - (aX - j) * (cY - aY)) * 0.5
+      if (area > maxArea) { maxArea = area; sel = j }
+    }
+    sampled.push(data[sel])
+    prevIdx = sel
+  }
+  sampled.push(data[n - 1])
+  return sampled
+}
+
+function Sparkline({ archive, recent }: { archive: number[]; recent: number[] }) {
+  const all = [...archive, ...recent]
+  if (all.length < 2) {
     return <div className="sparkline-empty">Play to see your balance chart</div>
   }
-  const W = 220, H = 54, PAD = 3
-  const min = Math.min(...data)
-  const max = Math.max(...data)
+  const W = 220, H = 60, PAD = 4
+  const innerW = W - PAD * 2, innerH = H - PAD * 2
+  const min = Math.min(...all)
+  const max = Math.max(...all)
   const range = max - min || 1
-  const toX = (i: number) => PAD + (i / (data.length - 1)) * (W - PAD * 2)
-  const toY = (v: number) => H - PAD - ((v - min) / range) * (H - PAD * 2)
-  const pts = data.map((v, i) => `${toX(i).toFixed(1)},${toY(v).toFixed(1)}`).join(' ')
-  const isUp = data[data.length - 1] >= data[0]
+  const toX = (i: number) => PAD + (i / (all.length - 1)) * innerW
+  const toY = (v: number) => PAD + innerH - ((v - min) / range) * innerH
+  const pts = all.map((v, i) => `${toX(i).toFixed(1)},${toY(v).toFixed(1)}`).join(' ')
+  const isUp = all[all.length - 1] >= all[0]
   const color = isUp ? '#00cc6a' : '#e05050'
-  const lastX = toX(data.length - 1)
-  const lastY = toY(data[data.length - 1])
+  const lastX = toX(all.length - 1)
+  const lastY = toY(all[all.length - 1])
+  // Baseline (start balance) as a faint reference line
+  const baseY = toY(all[0])
+  // Archive/recent divider x position
+  const dividerX = archive.length > 0 ? toX(archive.length - 1) : null
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="sparkline-svg" preserveAspectRatio="none">
       <defs>
         <linearGradient id="sparkGrad" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={color} stopOpacity="0.25" />
+          <stop offset="0%" stopColor={color} stopOpacity="0.2" />
           <stop offset="100%" stopColor={color} stopOpacity="0" />
         </linearGradient>
       </defs>
+      {/* Baseline */}
+      <line x1={PAD} y1={baseY.toFixed(1)} x2={W - PAD} y2={baseY.toFixed(1)}
+        stroke="rgba(255,255,255,0.07)" strokeWidth="1" strokeDasharray="3,3" />
+      {/* Fill */}
       <polyline
         points={`${pts} ${lastX.toFixed(1)},${H - PAD} ${PAD},${H - PAD}`}
-        fill="url(#sparkGrad)"
-        stroke="none"
+        fill="url(#sparkGrad)" stroke="none"
       />
-      <polyline points={pts} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      {/* Archive/recent boundary — subtle tick showing where condensation begins */}
+      {dividerX !== null && (
+        <line x1={dividerX.toFixed(1)} y1={H - PAD} x2={dividerX.toFixed(1)} y2={H - PAD - 4}
+          stroke="rgba(255,255,255,0.15)" strokeWidth="1" />
+      )}
+      {/* Line */}
+      <polyline points={pts} fill="none" stroke={color} strokeWidth="1.5"
+        strokeLinecap="round" strokeLinejoin="round" />
+      {/* Current point dot */}
       <circle cx={lastX.toFixed(1)} cy={lastY.toFixed(1)} r="2.5" fill={color} />
     </svg>
   )
@@ -147,19 +197,30 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
   const [showSessionTracker, setShowSessionTracker] = useLocalStorage('slots_showSessionTracker', false)
   const [sessionSpins, setSessionSpins] = useLocalStorage('slots_sessionSpins', 0)
   const [sessionBonuses, setSessionBonuses] = useLocalStorage('slots_sessionBonuses', 0)
-  const [balanceHistory, setBalanceHistory] = useLocalStorage<number[]>('slots_balanceHistory', () => [balance])
+  const [historyState, setHistoryState] = useLocalStorage<HistoryState>(
+    'slots_balanceHistory_v2',
+    () => ({ archive: [], recent: [balance] }),
+  )
 
   // Keep refs updated
   useEffect(() => {
     balanceRef.current = balance
   }, [balance])
 
-  // Track balance history for session chart (cap at 200 points)
+  // Track balance history — LTTB condensation keeps memory bounded at ≤200 points
   useEffect(() => {
-    setBalanceHistory(h => {
-      if (h[h.length - 1] === balance) return h
-      const next = [...h, balance]
-      return next.length > 200 ? next.slice(-200) : next
+    setHistoryState(prev => {
+      const last = prev.recent.length > 0
+        ? prev.recent[prev.recent.length - 1]
+        : prev.archive[prev.archive.length - 1]
+      if (last === balance) return prev
+      const newRecent = [...prev.recent, balance]
+      // When recent hits 100, merge with archive and condense the combined set back to 100
+      if (newRecent.length >= 100) {
+        const combined = [...prev.archive, ...newRecent]
+        return { archive: lttb(combined, Math.min(100, combined.length)), recent: [] }
+      }
+      return { ...prev, recent: newRecent }
     })
   }, [balance]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1787,9 +1848,12 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
 
       {/* Session tracker panel */}
       {showSessionTracker && (() => {
-        const startBal = balanceHistory[0] ?? balance
+        const allPoints = [...historyState.archive, ...historyState.recent]
+        const startBal = allPoints[0] ?? balance
         const net = balance - startBal
         const isUp = net >= 0
+        const peak = allPoints.length > 0 ? Math.max(...allPoints) : balance
+        const low  = allPoints.length > 0 ? Math.min(...allPoints) : balance
         return (
           <div className="session-panel">
             <div className="panel-header">
@@ -1814,6 +1878,14 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
                 <span className="session-stat-label">Now</span>
                 <span className="session-stat-value">£{balance.toFixed(2)}</span>
               </div>
+              <div className="session-stat">
+                <span className="session-stat-label">Peak</span>
+                <span className="session-stat-value session-net positive">£{peak.toFixed(2)}</span>
+              </div>
+              <div className="session-stat">
+                <span className="session-stat-label">Low</span>
+                <span className="session-stat-value session-net negative">£{low.toFixed(2)}</span>
+              </div>
               <div className="session-stat session-stat-wide">
                 <span className="session-stat-label">Net</span>
                 <span className={`session-stat-value session-net ${isUp ? 'positive' : 'negative'}`}>
@@ -1823,7 +1895,14 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
             </div>
 
             <div className="session-chart">
-              <Sparkline data={balanceHistory} />
+              <Sparkline archive={historyState.archive} recent={historyState.recent} />
+            </div>
+
+            <div className="session-chart-legend">
+              <span>
+                {allPoints.length} pts
+                {historyState.archive.length > 0 && ` · ${historyState.archive.length} condensed`}
+              </span>
             </div>
 
             <button
@@ -1831,7 +1910,7 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
               onClick={() => {
                 setSessionSpins(0)
                 setSessionBonuses(0)
-                setBalanceHistory([balance])
+                setHistoryState({ archive: [], recent: [balance] })
               }}
             >
               Reset Session
