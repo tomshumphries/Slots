@@ -34,11 +34,11 @@ export const GAME_CONFIG = {
     // Base payout per winning cluster (multiplied by betAmount).
     // Applies to a minimum-size cluster; larger clusters receive an additional size multiplier.
     payouts: {
-      '🍒': 0.265,
-      '🍀': 0.425,
-      '🍇': 0.64,
-      '🔔': 1.07,
-      '💎': 2.65,
+      '🍒': 0.250,
+      '🍀': 0.400,
+      '🍇': 0.610,
+      '🔔': 1.550,
+      '💎': 5.000,
     } as Record<string, number>,
 
     // Fallback payout used when a symbol has no entry in the payouts table

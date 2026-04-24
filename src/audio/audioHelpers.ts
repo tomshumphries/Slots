@@ -1,12 +1,13 @@
 // Audio helper functions for playing win/bonus sounds
 
 import { WIN_SOUND_TIERS, BONUS_SOUND } from '../config'
+import { soundManager } from './SoundManager'
 
 // Play win sound based on win amount
 export function playWinSound(winAmount: number): void {
   for (const tier of WIN_SOUND_TIERS) {
     if (winAmount >= tier.threshold) {
-      new Audio(tier.sound).play().catch(() => {})
+      soundManager.playFileSound(tier.sound)
       return
     }
   }
@@ -14,5 +15,5 @@ export function playWinSound(winAmount: number): void {
 
 // Play bonus sound
 export function playBonusSound(): void {
-  new Audio(BONUS_SOUND).play().catch(() => {})
+  soundManager.playFileSound(BONUS_SOUND)
 }

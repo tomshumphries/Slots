@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
+import { useLocalStorage } from '../hooks/useLocalStorage'
 import './SlotMachine.css'
 
 // Config imports
@@ -51,6 +52,40 @@ import {
 } from '../logic'
 import type { Rng } from '../logic'
 
+function Sparkline({ data }: { data: number[] }) {
+  if (data.length < 2) {
+    return <div className="sparkline-empty">Play to see your balance chart</div>
+  }
+  const W = 220, H = 54, PAD = 3
+  const min = Math.min(...data)
+  const max = Math.max(...data)
+  const range = max - min || 1
+  const toX = (i: number) => PAD + (i / (data.length - 1)) * (W - PAD * 2)
+  const toY = (v: number) => H - PAD - ((v - min) / range) * (H - PAD * 2)
+  const pts = data.map((v, i) => `${toX(i).toFixed(1)},${toY(v).toFixed(1)}`).join(' ')
+  const isUp = data[data.length - 1] >= data[0]
+  const color = isUp ? '#00cc6a' : '#e05050'
+  const lastX = toX(data.length - 1)
+  const lastY = toY(data[data.length - 1])
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="sparkline-svg" preserveAspectRatio="none">
+      <defs>
+        <linearGradient id="sparkGrad" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity="0.25" />
+          <stop offset="100%" stopColor={color} stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <polyline
+        points={`${pts} ${lastX.toFixed(1)},${H - PAD} ${PAD},${H - PAD}`}
+        fill="url(#sparkGrad)"
+        stroke="none"
+      />
+      <polyline points={pts} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx={lastX.toFixed(1)} cy={lastY.toFixed(1)} r="2.5" fill={color} />
+    </svg>
+  )
+}
+
 function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
   const [grid, setGrid] = useState<string[][]>(() => generateGrid())
   const [spinning, setSpinning] = useState(false)
@@ -61,7 +96,7 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
   const [message, setMessage] = useState('')
   const [chainCount, setChainCount] = useState(0)
   const [showBonusModal, setShowBonusModal] = useState(false)
-  const [minWinForAudio, setMinWinForAudio] = useState(0)
+  const [minWinForAudio, setMinWinForAudio] = useLocalStorage('slots_minWinAudio', 0)
   const spinningRef = useRef(false)
 
   // Bonus mode state
@@ -90,13 +125,13 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
   const [showBigWin, setShowBigWin] = useState(false)
   const BIG_WIN_THRESHOLD = GAME_CONFIG.economy.bigWinThreshold
 
-  // Panel visibility — start collapsed on small screens
-  const [showInfoCard, setShowInfoCard] = useState(() => window.innerWidth > 1100)
-  const [showAdminPanel, setShowAdminPanel] = useState(() => window.innerWidth > 900)
+  // Panel visibility — persisted so state survives reload
+  const [showInfoCard, setShowInfoCard] = useLocalStorage('slots_showInfoCard', () => window.innerWidth > 1100)
+  const [showAdminPanel, setShowAdminPanel] = useLocalStorage('slots_showAdminPanel', () => window.innerWidth > 900)
 
   // Admin/testing features
-  const [autoSpin, setAutoSpin] = useState(false)
-  const [autoDeposit, setAutoDeposit] = useState(true)
+  const [autoSpin, setAutoSpin] = useLocalStorage('slots_autoSpin', false)
+  const [autoDeposit, setAutoDeposit] = useLocalStorage('slots_autoDeposit', true)
   const autoSpinRef = useRef(false)
 
   // Seed debugger: optional fixed seed for reproducible spins
@@ -104,14 +139,29 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
   const [lastSpinSeed, setLastSpinSeed] = useState<number | null>(null)
   const balanceRef = useRef(balance)
   const [musicPlaying, setMusicPlaying] = useState(false)
-  const [sfxVolume, setSfxVolume] = useState(50)
-  const [musicVolume, setMusicVolume] = useState(30)
+  const [sfxVolume, setSfxVolume] = useLocalStorage('slots_sfxVolume', 50)
+  const [musicVolume, setMusicVolume] = useLocalStorage('slots_musicVolume', 30)
   const [showPayoutInfo, setShowPayoutInfo] = useState(false)
+
+  // Session tracking
+  const [showSessionTracker, setShowSessionTracker] = useLocalStorage('slots_showSessionTracker', false)
+  const [sessionSpins, setSessionSpins] = useLocalStorage('slots_sessionSpins', 0)
+  const [sessionBonuses, setSessionBonuses] = useLocalStorage('slots_sessionBonuses', 0)
+  const [balanceHistory, setBalanceHistory] = useLocalStorage<number[]>('slots_balanceHistory', () => [balance])
 
   // Keep refs updated
   useEffect(() => {
     balanceRef.current = balance
   }, [balance])
+
+  // Track balance history for session chart (cap at 200 points)
+  useEffect(() => {
+    setBalanceHistory(h => {
+      if (h[h.length - 1] === balance) return h
+      const next = [...h, balance]
+      return next.length > 200 ? next.slice(-200) : next
+    })
+  }, [balance]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     freeSpinsRef.current = freeSpins
@@ -143,6 +193,7 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
 
   // Start bonus mode
   const startBonusMode = useCallback(() => {
+    setSessionBonuses(b => b + 1)
     setShowBonusModal(false)
     setBonusMode(true)
     setFreeSpins(GAME_CONFIG.bonusRound.freeSpins)
@@ -174,6 +225,7 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
     if (freeSpinsRef.current <= 0 || spinningRef.current) return
 
     spinningRef.current = true
+    setSessionSpins(s => s + 1)
     // Decrement free spins - update ref immediately so async code sees correct value
     const newSpinCount = freeSpinsRef.current - 1
     freeSpinsRef.current = newSpinCount
@@ -640,6 +692,7 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
     }
 
     spinningRef.current = true
+    setSessionSpins(s => s + 1)
     onBalanceChange(-BET_AMOUNT)
     setSpinning(true)
     soundManager.startSpin()
@@ -1032,107 +1085,117 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
 
   return (
     <div className={`slot-machine ${bonusMode ? 'bonus-mode' : ''}`}>
-      {/* Info Cards - positioned to the left of the game area */}
-      <div className="info-cards-container">
-        <button className="panel-toggle" onClick={() => setShowInfoCard(v => !v)}>
-          {showInfoCard ? '▲ Hide' : '▼ How to Play'}
+      {/* Info Panel trigger — shown when panel is closed */}
+      {!showInfoCard && (
+        <button className="info-trigger-btn" onClick={() => setShowInfoCard(true)} title="How to Play">
+          ?
         </button>
-        {showInfoCard && (!bonusMode ? (
-          // Normal Play Info Card
-          <div className="info-card normal-info">
-            <h3>How to Play</h3>
-            <div className="info-section">
-              <h4>Matching</h4>
-              <p>Connect <strong>7+</strong> matching symbols horizontally or vertically to win.</p>
-            </div>
-            <div className="info-section">
-              <h4>Symbols</h4>
-              <div className="symbol-list">
-                <span>🍒 Common</span>
-                <span>🍀 Common</span>
-                <span>🍇 Medium</span>
-                <span>🔔 Rare</span>
-                <span>💎 Jackpot</span>
-              </div>
-            </div>
-            <div className="info-section">
-              <h4>Cascades</h4>
-              <p>Winning symbols disappear and new ones fall. Keep matching to fill the meter!</p>
-            </div>
-            <div className="info-section">
-              <h4>Fruit Meter</h4>
-              <p>Every matched symbol fills the meter. Hit breakpoints to spawn ⭐ wild symbols!</p>
-              <div className="breakpoint-list">
-                <span>15 → +2⭐</span>
-                <span>30 → +3⭐</span>
-                <span>45 → +4⭐</span>
-                <span>60 → BONUS!</span>
-              </div>
-            </div>
-            <div className="info-section">
-              <h4>Wilds & Multipliers</h4>
-              <p>⭐ Wilds match any symbol. Multipliers (2x-10x) boost your cluster wins!</p>
-              <p className="mega-wild-info">🔮 <strong>Mega Wild</strong> (Rare!) - Consumes ALL matching symbols on the grid!</p>
-            </div>
+      )}
 
-            {/* Bonus Preview Section */}
-            <div className="bonus-preview">
-              <div className="bonus-preview-header">
-                <span>🎰</span>
-                <h4>Bonus Round</h4>
-                <span>🎰</span>
+      {/* Info Panel */}
+      {showInfoCard && (
+        <div className="info-cards-container">
+          <div className="panel-header">
+            <span className={`panel-title ${bonusMode ? 'green' : 'gold'}`}>
+              {bonusMode ? 'Bonus Active' : 'How to Play'}
+            </span>
+            <button className="panel-close-btn" onClick={() => setShowInfoCard(false)}>×</button>
+          </div>
+          {!bonusMode ? (
+            // Normal Play Info Card
+            <div className="info-card normal-info">
+              <div className="info-section">
+                <h4>Matching</h4>
+                <p>Connect <strong>{MIN_CLUSTER_SIZE}+</strong> matching symbols horizontally or vertically to win.</p>
               </div>
               <div className="info-section">
-                <h4>10 Free Spins</h4>
-                <p>Fill the meter to 60 to trigger the bonus and win <strong>10 free spins</strong>!</p>
+                <h4>Symbols</h4>
+                <div className="symbol-list">
+                  <span>🍒 Common</span>
+                  <span>🍀 Common</span>
+                  <span>🍇 Medium</span>
+                  <span>🔔 Rare</span>
+                  <span>💎 Jackpot</span>
+                </div>
               </div>
               <div className="info-section">
-                <h4>Wild Spawns</h4>
-                <p>Hit meter milestones (25, 50, 75) to spawn wilds. Fill it completely for <strong>+2 extra spins</strong>!</p>
+                <h4>Cascades</h4>
+                <p>Winning symbols disappear and new ones fall. Keep matching to fill the meter!</p>
               </div>
               <div className="info-section">
-                <h4>Better Multipliers</h4>
-                <p>Multipliers appear more often, including the exclusive <strong>20x multiplier</strong>!</p>
+                <h4>Fruit Meter</h4>
+                <p>Every matched symbol fills the meter. Hit breakpoints to spawn ⭐ wild symbols!</p>
+                <div className="breakpoint-list">
+                  {FRUIT_METER_BREAKPOINTS.map((bp, i) => {
+                    const isLast = i === FRUIT_METER_BREAKPOINTS.length - 1
+                    return <span key={bp}>{bp} → {isLast ? 'BONUS!' : `+${WILDS_PER_BREAKPOINT[i]}⭐`}</span>
+                  })}
+                </div>
+              </div>
+              <div className="info-section">
+                <h4>Wilds & Multipliers</h4>
+                <p>⭐ Wilds match any symbol. Multipliers ({Math.min(...GAME_CONFIG.multipliers.normal.availableValues)}x–{Math.max(...GAME_CONFIG.multipliers.normal.availableValues)}x) boost your cluster wins!</p>
+                <p className="mega-wild-info">🔮 <strong>Mega Wild</strong> (Rare!) — Consumes ALL matching symbols on the grid!</p>
+              </div>
+
+              {/* Bonus Preview Section */}
+              <div className="bonus-preview">
+                <div className="bonus-preview-header">
+                  <span>🎰</span>
+                  <h4>Bonus Round</h4>
+                  <span>🎰</span>
+                </div>
+                <div className="info-section">
+                  <h4>{GAME_CONFIG.bonusRound.freeSpins} Free Spins</h4>
+                  <p>Fill the meter to <strong>{FRUIT_METER_MAX}</strong> to trigger the bonus and win <strong>{GAME_CONFIG.bonusRound.freeSpins} free spins</strong>!</p>
+                </div>
+                <div className="info-section">
+                  <h4>Wild Spawns</h4>
+                  <p>Hit meter milestones ({BONUS_FRUIT_METER_BREAKPOINTS.slice(0, -1).join(', ')}) to spawn wilds. Fill it completely for <strong>+{GAME_CONFIG.fruitMeter.bonus.extraSpinsOnFill} extra spins</strong>!</p>
+                </div>
+                <div className="info-section">
+                  <h4>Better Multipliers</h4>
+                  <p>Multipliers appear more often, including the exclusive <strong>20x multiplier</strong>!</p>
+                </div>
+                <div className="info-section">
+                  <h4>Sticky Multipliers</h4>
+                  <p>Any multiplier in a winning cluster sticks in place for all remaining spins!</p>
+                </div>
+              </div>
+            </div>
+          ) : (
+            // Bonus Mode Info Card
+            <div className="info-card bonus-info">
+              <div className="info-section">
+                <h4>Free Spins</h4>
+                <p>You have <strong>free spins</strong> — no cost per spin! Use them wisely.</p>
               </div>
               <div className="info-section">
                 <h4>Sticky Multipliers</h4>
-                <p>Any multiplier in a winning cluster sticks in place for all remaining spins!</p>
+                <p>Any multiplier in a winning cluster <strong>sticks in place</strong> for all remaining bonus spins!</p>
+              </div>
+              <div className="info-section">
+                <h4>More Multipliers</h4>
+                <p>Multipliers appear more frequently, including the rare <strong>20x</strong>!</p>
+              </div>
+              <div className="info-section">
+                <h4>Bonus Meter ({BONUS_FRUIT_METER_MAX})</h4>
+                <p>Fill it completely to earn <strong>+{GAME_CONFIG.fruitMeter.bonus.extraSpinsOnFill} extra spins</strong>!</p>
+                <div className="breakpoint-list">
+                  {BONUS_FRUIT_METER_BREAKPOINTS.map((bp, i) => {
+                    const isLast = i === BONUS_FRUIT_METER_BREAKPOINTS.length - 1
+                    return <span key={bp}>{bp} → {isLast ? `+${GAME_CONFIG.fruitMeter.bonus.extraSpinsOnFill} Spins` : `+${BONUS_WILDS_PER_BREAKPOINT[i]}⭐`}</span>
+                  })}
+                </div>
+              </div>
+              <div className="info-section highlight">
+                <h4>Key Mechanic</h4>
+                <p>The meter works just like normal play but with a <strong>bigger target ({BONUS_FRUIT_METER_MAX})</strong>. Fill it completely to earn <strong>+{GAME_CONFIG.fruitMeter.bonus.extraSpinsOnFill} Free Spins!</strong></p>
               </div>
             </div>
-          </div>
-        ) : (
-          // Bonus Mode Info Card
-          <div className="info-card bonus-info">
-            <h3>Bonus Mode Active</h3>
-            <div className="info-section">
-              <h4>Free Spins</h4>
-              <p>You have <strong>free spins</strong> - no cost per spin! Use them wisely.</p>
-            </div>
-            <div className="info-section">
-              <h4>Sticky Multipliers</h4>
-              <p>Any multiplier in a winning cluster <strong>sticks in place</strong> for all remaining bonus spins!</p>
-            </div>
-            <div className="info-section">
-              <h4>More Multipliers</h4>
-              <p>Multipliers appear more frequently, including the rare <strong>20x</strong>!</p>
-            </div>
-            <div className="info-section">
-              <h4>Bonus Meter (100)</h4>
-              <p>Fill it completely to earn <strong>+2 extra spins</strong>!</p>
-              <div className="breakpoint-list">
-                <span>25 → +2⭐</span>
-                <span>50 → +3⭐</span>
-                <span>75 → +4⭐</span>
-                <span>100 → +2 Spins</span>
-              </div>
-            </div>
-            <div className="info-section highlight">
-              <h4>Key Mechanic</h4>
-              <p>The meter works just like normal play but with a <strong>bigger target (100)</strong>. Fill it completely to earn <strong>+2 Free Spins!</strong></p>
-            </div>
-          </div>
-        ))}
-      </div>
+          )}
+        </div>
+      )}
 
       {bonusMode && (
         <div className="bonus-mode-header">
@@ -1323,155 +1386,156 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
         )}
       </div>
 
-      {/* Admin Panel - positioned off to the side */}
-      <div className="admin-panel">
-        <div className="admin-title" style={{ cursor: 'pointer' }} onClick={() => setShowAdminPanel(v => !v)}>
-          Admin {showAdminPanel ? '▲' : '▼'}
-        </div>
-        {showAdminPanel && <>
-
-        <label className="admin-checkbox">
-          <input
-            type="checkbox"
-            checked={autoSpin}
-            onChange={(e) => setAutoSpin(e.target.checked)}
-          />
-          Auto Spin
-        </label>
-
-        <label className="admin-checkbox">
-          <input
-            type="checkbox"
-            checked={autoDeposit}
-            onChange={(e) => setAutoDeposit(e.target.checked)}
-          />
-          Auto Deposit (£5 when empty)
-        </label>
-
-        <div className="admin-slider">
-          <span>Min audio: £{minWinForAudio.toFixed(2)}</span>
-          <input
-            type="range"
-            min="0"
-            max="10"
-            step="0.5"
-            value={minWinForAudio}
-            onChange={(e) => setMinWinForAudio(parseFloat(e.target.value))}
-          />
-        </div>
-
-        <div className="admin-divider" />
-
-        <button
-          className={`admin-btn ${musicPlaying ? 'active' : ''}`}
-          onClick={() => {
-            const playing = soundManager.toggleMusic()
-            setMusicPlaying(playing)
-          }}
-        >
-          {musicPlaying ? '🔊 Music ON' : '🔇 Music OFF'}
+      {/* Admin trigger — shown when panel is closed */}
+      {!showAdminPanel && (
+        <button className="admin-trigger-btn" onClick={() => setShowAdminPanel(true)} title="Admin Panel">
+          ⚙
         </button>
+      )}
 
-        <div className="admin-slider">
-          <span>Music: {musicVolume}%</span>
-          <input
-            type="range"
-            min="0"
-            max="100"
-            step="5"
-            value={musicVolume}
-            onChange={(e) => setMusicVolume(parseInt(e.target.value))}
-          />
-        </div>
+      {/* Admin Panel */}
+      {showAdminPanel && (
+        <div className="admin-panel">
+          <div className="panel-header">
+            <span className="panel-title">Admin</span>
+            <button className="panel-close-btn" onClick={() => setShowAdminPanel(false)}>×</button>
+          </div>
 
-        <div className="admin-slider">
-          <span>SFX: {sfxVolume}%</span>
-          <input
-            type="range"
-            min="0"
-            max="100"
-            step="5"
-            value={sfxVolume}
-            onChange={(e) => setSfxVolume(parseInt(e.target.value))}
-          />
-        </div>
+          <div className="admin-group">
+            <span className="admin-group-label">Automation</span>
+            <label className="admin-checkbox">
+              <input
+                type="checkbox"
+                checked={autoSpin}
+                onChange={(e) => setAutoSpin(e.target.checked)}
+              />
+              Auto Spin
+            </label>
+            <label className="admin-checkbox">
+              <input
+                type="checkbox"
+                checked={autoDeposit}
+                onChange={(e) => setAutoDeposit(e.target.checked)}
+              />
+              Auto Deposit (£5 when empty)
+            </label>
+          </div>
 
-        <div className="admin-divider" />
-
-        <button
-          className="admin-btn"
-          onClick={() => {
-            setFruitMeter(0) // Reset meter when using test bonus
-            setShowBonusModal(true)
-            playBonusSound()
-          }}
-        >
-          Test Bonus
-        </button>
-
-        <button
-          className="admin-btn"
-          onClick={() => onBalanceChange(100)}
-        >
-          +£100
-        </button>
-
-        <button
-          className="admin-btn mega-wild-btn"
-          onClick={() => {
-            // Spawn a mega wild at a random position on the grid
-            const newGrid = grid.map(col => [...col])
-            const col = Math.floor(Math.random() * COLS)
-            const row = Math.floor(Math.random() * (bonusMode ? activeRows : BASE_ROWS))
-            newGrid[col][row] = '🔮'
-            setGrid(newGrid)
-            setMessage('🔮 MEGA WILD SPAWNED! Spin to see its power!')
-          }}
-          disabled={spinning}
-        >
-          Test 🔮
-        </button>
-
-        <div className="admin-divider" />
-
-        <button
-          className="admin-btn"
-          onClick={() => setShowPayoutInfo(true)}
-        >
-          Payout Info
-        </button>
-
-        <div className="admin-divider" />
-
-        <div className="admin-seed-section">
-          <span className="admin-seed-label">Spin seed</span>
-          <input
-            className="admin-seed-input"
-            type="number"
-            min="0"
-            max="4294967295"
-            placeholder="random"
-            value={seedInput}
-            onChange={e => setSeedInput(e.target.value)}
-          />
-          {seedInput.trim() !== '' && (
-            <button className="admin-btn" onClick={() => setSeedInput('')}>Clear</button>
-          )}
-          {lastSpinSeed !== null && (
-            <div
-              className="admin-seed-last"
-              title="Click to copy"
+          <div className="admin-group">
+            <span className="admin-group-label">Audio</span>
+            <div className="admin-slider">
+              <span>Min win: £{minWinForAudio.toFixed(2)}</span>
+              <input
+                type="range"
+                min="0"
+                max="10"
+                step="0.5"
+                value={minWinForAudio}
+                onChange={(e) => setMinWinForAudio(parseFloat(e.target.value))}
+              />
+            </div>
+            <button
+              className={`admin-btn ${musicPlaying ? 'active' : ''}`}
               onClick={() => {
-                navigator.clipboard.writeText(String(lastSpinSeed))
-                setSeedInput(String(lastSpinSeed))
+                const playing = soundManager.toggleMusic()
+                setMusicPlaying(playing)
               }}
             >
-              Last: {lastSpinSeed}
+              {musicPlaying ? '🔊 Music ON' : '🔇 Music OFF'}
+            </button>
+            <div className="admin-slider">
+              <span>Music: {musicVolume}%</span>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                step="5"
+                value={musicVolume}
+                onChange={(e) => setMusicVolume(parseInt(e.target.value))}
+              />
             </div>
-          )}
+            <div className="admin-slider">
+              <span>SFX: {sfxVolume}%</span>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                step="5"
+                value={sfxVolume}
+                onChange={(e) => setSfxVolume(parseInt(e.target.value))}
+              />
+            </div>
+          </div>
+
+          <div className="admin-group">
+            <span className="admin-group-label">Testing</span>
+            <button
+              className="admin-btn"
+              onClick={() => {
+                setFruitMeter(0)
+                setShowBonusModal(true)
+                playBonusSound()
+              }}
+            >
+              Test Bonus
+            </button>
+            <button
+              className="admin-btn"
+              onClick={() => onBalanceChange(100)}
+            >
+              +£100
+            </button>
+            <button
+              className="admin-btn mega-wild-btn"
+              onClick={() => {
+                const newGrid = grid.map(col => [...col])
+                const col = Math.floor(Math.random() * COLS)
+                const row = Math.floor(Math.random() * (bonusMode ? activeRows : BASE_ROWS))
+                newGrid[col][row] = '🔮'
+                setGrid(newGrid)
+                setMessage('🔮 MEGA WILD SPAWNED! Spin to see its power!')
+              }}
+              disabled={spinning}
+            >
+              Test 🔮
+            </button>
+            <button
+              className="admin-btn"
+              onClick={() => setShowPayoutInfo(true)}
+            >
+              Payout Info
+            </button>
+          </div>
+
+          <div className="admin-group">
+            <span className="admin-group-label">Seed Debugger</span>
+            <input
+              className="admin-seed-input"
+              type="number"
+              min="0"
+              max="4294967295"
+              placeholder="random"
+              value={seedInput}
+              onChange={e => setSeedInput(e.target.value)}
+            />
+            {seedInput.trim() !== '' && (
+              <button className="admin-btn" onClick={() => setSeedInput('')}>Clear</button>
+            )}
+            {lastSpinSeed !== null && (
+              <div
+                className="admin-seed-last"
+                title="Click to copy"
+                onClick={() => {
+                  navigator.clipboard.writeText(String(lastSpinSeed))
+                  setSeedInput(String(lastSpinSeed))
+                }}
+              >
+                Last: {lastSpinSeed}
+              </div>
+            )}
+          </div>
         </div>
-        </>}
-      </div>
+      )}
 
       <div className="message-container">
         <div className={`message ${lastWin > 0 ? 'win' : ''}`}>
@@ -1575,13 +1639,21 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
                   </tr>
                 </thead>
                 <tbody>
-                  <tr><td>7 symbols</td><td>1.0x</td><td>£{(SYMBOL_PAYOUTS['🍇'] * 1.0).toFixed(2)}</td></tr>
-                  <tr><td>8-9 symbols</td><td>1.4x</td><td>£{(SYMBOL_PAYOUTS['🍇'] * 1.4).toFixed(2)}</td></tr>
-                  <tr><td>10-11 symbols</td><td>2.0x</td><td>£{(SYMBOL_PAYOUTS['🍇'] * 2.0).toFixed(2)}</td></tr>
-                  <tr><td>12-14 symbols</td><td>3.0x</td><td>£{(SYMBOL_PAYOUTS['🍇'] * 3.0).toFixed(2)}</td></tr>
-                  <tr><td>15-19 symbols</td><td>5.0x</td><td>£{(SYMBOL_PAYOUTS['🍇'] * 5.0).toFixed(2)}</td></tr>
-                  <tr><td>20-24 symbols</td><td>8.0x</td><td>£{(SYMBOL_PAYOUTS['🍇'] * 8.0).toFixed(2)}</td></tr>
-                  <tr><td>25+ symbols</td><td>12.0x</td><td>£{(SYMBOL_PAYOUTS['🍇'] * 12.0).toFixed(2)}</td></tr>
+                  {[...GAME_CONFIG.clusters.sizeTiers].reverse().map((tier, i, arr) => {
+                    const next = arr[i + 1]
+                    const sizeLabel = !next
+                      ? `${tier.minSize}+ symbols`
+                      : next.minSize === tier.minSize + 1
+                      ? `${tier.minSize} symbols`
+                      : `${tier.minSize}–${next.minSize - 1} symbols`
+                    return (
+                      <tr key={tier.minSize}>
+                        <td>{sizeLabel}</td>
+                        <td>{tier.multiplier.toFixed(1)}x</td>
+                        <td>£{(SYMBOL_PAYOUTS['🍇'] * tier.multiplier).toFixed(2)}</td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
@@ -1598,11 +1670,17 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
                   </tr>
                 </thead>
                 <tbody>
-                  <tr><td>2x</td><td>{MULTIPLIER_WEIGHTS[2]}</td><td>~70%</td></tr>
-                  <tr><td>3x</td><td>{MULTIPLIER_WEIGHTS[3]}</td><td>~17%</td></tr>
-                  <tr><td>5x</td><td>{MULTIPLIER_WEIGHTS[5]}</td><td>~8%</td></tr>
-                  <tr><td>10x</td><td>{MULTIPLIER_WEIGHTS[10]}</td><td>~3%</td></tr>
-                  <tr><td>20x (Bonus only)</td><td>{MULTIPLIER_WEIGHTS[20]}</td><td>~1%</td></tr>
+                  {(() => {
+                    const totalW = Object.values(MULTIPLIER_WEIGHTS).reduce((a, b) => a + b, 0)
+                    const normalVals = GAME_CONFIG.multipliers.normal.availableValues as readonly number[]
+                    return GAME_CONFIG.multipliers.allValues.map(v => (
+                      <tr key={v}>
+                        <td>{v}x{!normalVals.includes(v) ? ' (Bonus only)' : ''}</td>
+                        <td>{MULTIPLIER_WEIGHTS[v]}</td>
+                        <td>~{Math.round((MULTIPLIER_WEIGHTS[v] / totalW) * 100)}%</td>
+                      </tr>
+                    ))
+                  })()}
                 </tbody>
               </table>
               <p className="payout-note">Multipliers stack additively: 2x + 3x = 5x total</p>
@@ -1627,7 +1705,7 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
                   <tr className="mega-wild-row">
                     <td>🔮 Mega Wild</td>
                     <td><strong>Consumes ALL matching symbols on grid!</strong></td>
-                    <td>0.1% normal / 0.5% bonus</td>
+                    <td>{(GAME_CONFIG.symbols.spawnChances.normal.megaWild * 100).toFixed(1)}% normal / {(GAME_CONFIG.symbols.spawnChances.bonus.megaWild * 100).toFixed(1)}% bonus</td>
                   </tr>
                 </tbody>
               </table>
@@ -1669,7 +1747,7 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
                   {BONUS_FRUIT_METER_BREAKPOINTS.map((bp, i) => (
                     <tr key={bp}>
                       <td>{bp} symbols</td>
-                      <td>{i === BONUS_FRUIT_METER_BREAKPOINTS.length - 1 ? '+2 Free Spins' : `+${BONUS_WILDS_PER_BREAKPOINT[i]} ⭐ Wilds`}</td>
+                      <td>{i === BONUS_FRUIT_METER_BREAKPOINTS.length - 1 ? `+${GAME_CONFIG.fruitMeter.bonus.extraSpinsOnFill} Free Spins` : `+${BONUS_WILDS_PER_BREAKPOINT[i]} ⭐ Wilds`}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -1680,7 +1758,7 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
               <h3>Bonus Mode Details</h3>
               <table className="payout-table">
                 <tbody>
-                  <tr><td>Starting Free Spins</td><td>10</td></tr>
+                  <tr><td>Starting Free Spins</td><td>{GAME_CONFIG.bonusRound.freeSpins}</td></tr>
                   <tr><td>Grid Size</td><td>{COLS} × {BASE_ROWS}</td></tr>
                   <tr><td>Multiplier Frequency</td><td>{(BONUS_MULTIPLIER_CHANCE * 100).toFixed(1)}% per cell ({(BONUS_MULTIPLIER_CHANCE / NORMAL_MULTIPLIER_CHANCE).toFixed(1)}× normal rate)</td></tr>
                   <tr><td>20x Multiplier</td><td>Available (bonus only)</td></tr>
@@ -1699,6 +1777,68 @@ function SlotMachine({ balance, onBalanceChange }: SlotMachineProps) {
           </div>
         </div>
       )}
+
+      {/* Session tracker trigger */}
+      {!showSessionTracker && (
+        <button className="session-trigger-btn" onClick={() => setShowSessionTracker(true)} title="Session Stats">
+          📊
+        </button>
+      )}
+
+      {/* Session tracker panel */}
+      {showSessionTracker && (() => {
+        const startBal = balanceHistory[0] ?? balance
+        const net = balance - startBal
+        const isUp = net >= 0
+        return (
+          <div className="session-panel">
+            <div className="panel-header">
+              <span className="panel-title">Session</span>
+              <button className="panel-close-btn" onClick={() => setShowSessionTracker(false)}>×</button>
+            </div>
+
+            <div className="session-stats">
+              <div className="session-stat">
+                <span className="session-stat-label">Spins</span>
+                <span className="session-stat-value">{sessionSpins}</span>
+              </div>
+              <div className="session-stat">
+                <span className="session-stat-label">Bonuses</span>
+                <span className="session-stat-value">{sessionBonuses}</span>
+              </div>
+              <div className="session-stat">
+                <span className="session-stat-label">Start</span>
+                <span className="session-stat-value">£{startBal.toFixed(2)}</span>
+              </div>
+              <div className="session-stat">
+                <span className="session-stat-label">Now</span>
+                <span className="session-stat-value">£{balance.toFixed(2)}</span>
+              </div>
+              <div className="session-stat session-stat-wide">
+                <span className="session-stat-label">Net</span>
+                <span className={`session-stat-value session-net ${isUp ? 'positive' : 'negative'}`}>
+                  {isUp ? '+' : ''}£{net.toFixed(2)}
+                </span>
+              </div>
+            </div>
+
+            <div className="session-chart">
+              <Sparkline data={balanceHistory} />
+            </div>
+
+            <button
+              className="session-reset-btn"
+              onClick={() => {
+                setSessionSpins(0)
+                setSessionBonuses(0)
+                setBalanceHistory([balance])
+              }}
+            >
+              Reset Session
+            </button>
+          </div>
+        )
+      })()}
     </div>
   )
 }

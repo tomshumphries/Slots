@@ -2,12 +2,13 @@ import { useState } from 'react'
 import SlotMachine from './components/SlotMachine'
 import Menu from './components/Menu'
 import SimLab from './components/SimLab'
+import { useLocalStorage } from './hooks/useLocalStorage'
 import './App.css'
 
 type Tab = 'game' | 'sim'
 
 function App() {
-  const [balance, setBalance] = useState(10)
+  const [balance, setBalance] = useLocalStorage('slots_balance', 10)
   const [tab, setTab] = useState<Tab>('game')
 
   const deposit = (amount: number) => setBalance(prev => prev + amount)
